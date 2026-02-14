@@ -1,0 +1,144 @@
+import SwiftUI
+
+struct TabItemView: View {
+    let tab: Tab
+    let isActive: Bool
+    let compact: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+    let onCloseOthers: () -> Void
+    let onCloseTabsBelow: () -> Void
+    let onCopyURL: () -> Void
+    let onDuplicate: () -> Void
+    let onTogglePin: () -> Void
+
+    @State private var isHovering = false
+
+    init(
+        tab: Tab,
+        isActive: Bool,
+        compact: Bool = false,
+        onSelect: @escaping () -> Void,
+        onClose: @escaping () -> Void,
+        onCloseOthers: @escaping () -> Void,
+        onCloseTabsBelow: @escaping () -> Void,
+        onCopyURL: @escaping () -> Void,
+        onDuplicate: @escaping () -> Void,
+        onTogglePin: @escaping () -> Void
+    ) {
+        self.tab = tab
+        self.isActive = isActive
+        self.compact = compact
+        self.onSelect = onSelect
+        self.onClose = onClose
+        self.onCloseOthers = onCloseOthers
+        self.onCloseTabsBelow = onCloseTabsBelow
+        self.onCopyURL = onCopyURL
+        self.onDuplicate = onDuplicate
+        self.onTogglePin = onTogglePin
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: compact ? 5 : 7) {
+                // Icon
+                Group {
+                    if tab.kind == .briefing {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: compact ? 9 : 10, weight: .semibold))
+                            .foregroundStyle(BrowseColor.briefBadge)
+                    } else {
+                        FaviconView(url: tab.faviconURL ?? tab.url, size: compact ? 12 : 14)
+                    }
+                }
+                .frame(width: compact ? 12 : 14, height: compact ? 12 : 14)
+                .opacity(max(0.5, tab.decayOpacity))
+                .saturation(tab.isStale && !tab.isPinned ? 0.3 : 1.0)
+
+                // Title
+                Text(displayTitle)
+                    .font(compact ? .system(size: 11, weight: .medium) : BrowseFont.tabTitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(isActive ? .primary : .secondary)
+                    .opacity(tab.decayOpacity)
+
+                // Close button — visible on hover or when active
+                closeButton
+            }
+            .padding(.horizontal, compact ? 8 : 10)
+            .padding(.vertical, compact ? 5 : 7)
+            .frame(maxWidth: .infinity)
+            .background(tabBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(
+                        isActive ? BrowseColor.accent.opacity(0.15) : Color.clear,
+                        lineWidth: 0.5
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Close") {
+                onClose()
+            }
+            Button("Close Others") {
+                onCloseOthers()
+            }
+            Button("Close Tabs Below") {
+                onCloseTabsBelow()
+            }
+            Button("Copy URL") {
+                onCopyURL()
+            }
+            .disabled(tab.webTabViewModel?.currentURL == nil && tab.url == nil)
+            Button("Duplicate") {
+                onDuplicate()
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: isHovering)
+        .animation(.easeOut(duration: 0.15), value: isActive)
+    }
+
+    // MARK: - Helpers
+
+    private var displayTitle: String {
+        if compact {
+            return String(tab.title.prefix(18))
+        }
+        return tab.title
+    }
+
+    private var tabBackground: some ShapeStyle {
+        if isActive {
+            return AnyShapeStyle(BrowseColor.surfaceActive)
+        } else if isHovering {
+            return AnyShapeStyle(BrowseColor.surfaceHover)
+        } else if compact && tab.isPinned {
+            return AnyShapeStyle(BrowseColor.accent.opacity(0.06))
+        } else {
+            return AnyShapeStyle(Color.clear)
+        }
+    }
+
+    @ViewBuilder
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: 7.5, weight: .bold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 16, height: 16)
+                .background(
+                    Circle()
+                        .fill(Color.primary.opacity(0.06))
+                )
+        }
+        .buttonStyle(.plain)
+        .opacity(isHovering || isActive ? 1 : 0)
+        .allowsHitTesting(isHovering || isActive)
+        .accessibilityHidden(!(isHovering || isActive))
+    }
+}
