@@ -72,11 +72,23 @@ struct PersistedTabSnapshot: Codable {
     let briefing: PersistedBriefingSnapshot?
 }
 
+struct PersistedPageChatSnapshot: Codable {
+    let pageURL: URL
+    let pageTitle: String
+    let conversationHistory: [ConversationMessage]
+    let updatedAt: Date
+}
+
 struct PersistedBrowserState: Codable {
     let tabs: [PersistedTabSnapshot]
     let activeTabID: UUID?
     let isTabBarVisible: Bool
     let tabBarWidth: Double
+    let chatPaneWidth: Double?
+    let chatPaneHeight: Double?
+    let chatPaneOffsetX: Double?
+    let chatPaneOffsetY: Double?
+    let pageChats: [PersistedPageChatSnapshot]?
 }
 
 struct BrowserPersistenceStore {

@@ -174,7 +174,28 @@ struct BrowserWindow: View {
                         newTabPage
                             .transition(.opacity.animation(.easeOut(duration: 0.25)))
                     }
+
+                    // Floating AI chat pane (self-positioning via GeometryReader)
+                    if browserVM.isChatPaneVisible, let chatVM = browserVM.chatViewModel {
+                        ChatPaneView(
+                            viewModel: chatVM,
+                            initialOffset: browserVM.chatPaneOffset,
+                            initialWidth: browserVM.chatPaneWidth,
+                            initialHeight: browserVM.chatPaneHeight,
+                            onGeometryCommit: { offset, width, height in
+                                browserVM.setChatPaneGeometry(offset: offset, width: width, height: height)
+                            },
+                            onClear: {
+                                browserVM.clearChatForCurrentPage()
+                            },
+                            onClose: {
+                                browserVM.closeChatPane()
+                            }
+                        )
+                        .transition(.opacity)
+                    }
                 }
+                .animation(.spring(response: 0.26, dampingFraction: 0.86), value: browserVM.isChatPaneVisible)
             } else {
                 newTabPage
             }

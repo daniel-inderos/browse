@@ -51,6 +51,25 @@ struct IntentBarView: View {
                 .buttonStyle(.plain)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
+
+            // Chat with page button
+            if browserVM.activeTab?.kind == .web,
+               browserVM.activeTab?.webTabViewModel?.currentURL != nil {
+                Button(action: { browserVM.toggleChatPane() }) {
+                    Image(systemName: browserVM.isChatPaneVisible
+                          ? "bubble.left.and.text.bubble.right.fill"
+                          : "bubble.left.and.text.bubble.right")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(browserVM.isChatPaneVisible
+                                         ? BrowseColor.accent
+                                         : Color.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Chat with page (\u{2318}J)")
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

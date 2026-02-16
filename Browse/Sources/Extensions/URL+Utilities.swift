@@ -17,4 +17,24 @@ extension URL {
         }
         return str
     }
+
+    /// Stable key for page-scoped chat sessions.
+    /// Ignores URL fragments so in-page anchor navigation reuses one chat.
+    var chatSessionKey: String {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return absoluteString
+        }
+
+        components.fragment = nil
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+
+        if let scheme = components.scheme,
+           let port = components.port,
+           (scheme == "http" && port == 80) || (scheme == "https" && port == 443) {
+            components.port = nil
+        }
+
+        return components.string ?? absoluteString
+    }
 }

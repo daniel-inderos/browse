@@ -10,16 +10,27 @@ final class BrowserViewModel {
     var isIntentBarRevealZoneHovered: Bool = false
     var isTabBarVisible: Bool = true
     var tabBarWidth: CGFloat = 220
+    var isChatPaneVisible: Bool = false
+    var chatPaneOffset: CGSize = .zero
+    var chatPaneWidth: CGFloat = 380
+    var chatPaneHeight: CGFloat = 480
+    var chatViewModel: ChatViewModel?
 
     private let keychain = KeychainService()
     private let persistenceStore = BrowserPersistenceStore()
     private let tabAnimation: Animation = .spring(response: 0.26, dampingFraction: 0.86)
     private let readingScrollHideThreshold: CGFloat = 24
     private let intentBarRevealHoverGraceDuration: TimeInterval = 0.45
+    private let minChatPaneWidth: CGFloat = 300
+    private let maxChatPaneWidth: CGFloat = 560
+    private let minChatPaneHeight: CGFloat = 280
+    private let maxChatPaneHeight: CGFloat = 720
     private var briefingScrollOffsetsByTabID: [UUID: CGFloat] = [:]
     private var intentBarRevealHoverGraceDeadline: Date = .distantPast
     private var recentlyClosedTabs: [Tab] = []
+    private var pageChatSnapshotsByKey: [String: PersistedPageChatSnapshot] = [:]
     private let maxRecentlyClosedTabs = 20
+    private let maxPersistedPageChats = 120
 
     var activeTab: Tab? {
         tabs.first { $0.id == activeTabID }
@@ -199,6 +210,15 @@ final class BrowserViewModel {
         }
         if let tab = tabs.first(where: { $0.id == id }) {
             tab.lastAccessedAt = Date()
+
+            // Reset chat pane context when switching tabs
+            if isChatPaneVisible {
+                if tab.kind == .web, let webVM = tab.webTabViewModel, webVM.currentURL != nil {
+                    updateChatContextIfNeeded(for: webVM)
+                } else {
+                    closeChatPane()
+                }
+            }
         }
         syncIntentBarVisibilityForActiveTab()
         persistState()
@@ -274,6 +294,54 @@ final class BrowserViewModel {
 
     func setTabBarWidth(_ width: CGFloat) {
         tabBarWidth = max(180, min(width, 360))
+        persistState()
+    }
+
+    // MARK: - Chat Pane
+
+    func toggleChatPane() {
+        if isChatPaneVisible {
+            closeChatPane()
+        } else {
+            openChatPane()
+        }
+    }
+
+    func openChatPane() {
+        guard let activeTab, activeTab.kind == .web,
+              let webVM = activeTab.webTabViewModel,
+              webVM.currentURL != nil else { return }
+
+        updateChatContextIfNeeded(for: webVM)
+
+        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
+            isChatPaneVisible = true
+        }
+    }
+
+    func closeChatPane() {
+        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
+            isChatPaneVisible = false
+        }
+    }
+
+    func clearChatForCurrentPage() {
+        guard let chatViewModel, !chatViewModel.isStreaming else { return }
+        chatViewModel.clearConversation()
+    }
+
+    func setChatPaneGeometry(offset: CGSize, width: CGFloat, height: CGFloat) {
+        let clampedWidth = clamp(width, min: minChatPaneWidth, max: maxChatPaneWidth)
+        let clampedHeight = clamp(height, min: minChatPaneHeight, max: maxChatPaneHeight)
+        let didChange =
+            chatPaneOffset != offset ||
+            chatPaneWidth != clampedWidth ||
+            chatPaneHeight != clampedHeight
+        guard didChange else { return }
+
+        chatPaneOffset = offset
+        chatPaneWidth = clampedWidth
+        chatPaneHeight = clampedHeight
         persistState()
     }
 
@@ -420,6 +488,17 @@ final class BrowserViewModel {
     private func restorePersistedState() -> Bool {
         guard let persisted = persistenceStore.load() else { return false }
         guard !persisted.tabs.isEmpty else { return false }
+        pageChatSnapshotsByKey = [:]
+        if let persistedPageChats = persisted.pageChats {
+            for snapshot in persistedPageChats {
+                let key = snapshot.pageURL.chatSessionKey
+                if let existing = pageChatSnapshotsByKey[key],
+                   existing.updatedAt > snapshot.updatedAt {
+                    continue
+                }
+                pageChatSnapshotsByKey[key] = snapshot
+            }
+        }
 
         tabs = persisted.tabs.map { snapshot in
             let tab = Tab(
@@ -467,6 +546,20 @@ final class BrowserViewModel {
 
         isTabBarVisible = persisted.isTabBarVisible
         tabBarWidth = max(180, min(CGFloat(persisted.tabBarWidth), 360))
+        chatPaneOffset = CGSize(
+            width: CGFloat(persisted.chatPaneOffsetX ?? 0),
+            height: CGFloat(persisted.chatPaneOffsetY ?? 0)
+        )
+        chatPaneWidth = clamp(
+            CGFloat(persisted.chatPaneWidth ?? Double(chatPaneWidth)),
+            min: minChatPaneWidth,
+            max: maxChatPaneWidth
+        )
+        chatPaneHeight = clamp(
+            CGFloat(persisted.chatPaneHeight ?? Double(chatPaneHeight)),
+            min: minChatPaneHeight,
+            max: maxChatPaneHeight
+        )
         return true
     }
 
@@ -487,12 +580,41 @@ final class BrowserViewModel {
             tabs: tabSnapshots,
             activeTabID: activeTabID,
             isTabBarVisible: isTabBarVisible,
-            tabBarWidth: Double(tabBarWidth)
+            tabBarWidth: Double(tabBarWidth),
+            chatPaneWidth: Double(chatPaneWidth),
+            chatPaneHeight: Double(chatPaneHeight),
+            chatPaneOffsetX: Double(chatPaneOffset.width),
+            chatPaneOffsetY: Double(chatPaneOffset.height),
+            pageChats: makePersistedPageChatSnapshots()
         )
     }
 
     private func persistState() {
         persistenceStore.save(makePersistedState())
+    }
+
+    private func makePersistedPageChatSnapshots() -> [PersistedPageChatSnapshot]? {
+        var snapshotsByKey = pageChatSnapshotsByKey
+
+        // Ensure the in-memory active chat is not dropped if it changed very recently.
+        if let chatVM = chatViewModel,
+           let pageURL = chatVM.pageURL,
+           !chatVM.conversationHistory.isEmpty {
+            let title = resolvedChatPageTitle(for: chatVM, pageURL: pageURL)
+            snapshotsByKey[pageURL.chatSessionKey] = PersistedPageChatSnapshot(
+                pageURL: pageURL,
+                pageTitle: title,
+                conversationHistory: chatVM.conversationHistory,
+                updatedAt: Date()
+            )
+        }
+
+        let snapshots = snapshotsByKey.values
+            .filter { !$0.conversationHistory.isEmpty }
+            .sorted { $0.updatedAt > $1.updatedAt }
+
+        guard !snapshots.isEmpty else { return nil }
+        return Array(snapshots.prefix(maxPersistedPageChats))
     }
 
     private func makeWebTab(
@@ -523,6 +645,13 @@ final class BrowserViewModel {
             guard let self, let tab, let webVM else { return }
             self.syncWebTabState(tab, from: webVM)
             self.persistState()
+
+            // Keep chat pane tied to the current page URL for the active tab.
+            if tab.id == self.activeTabID,
+               self.isChatPaneVisible,
+               webVM.currentURL != nil {
+                self.updateChatContextIfNeeded(for: webVM)
+            }
         }
         webVM.onScrollPositionChange = { [weak self, weak tab] offsetY in
             guard let self, let tab else { return }
@@ -536,6 +665,93 @@ final class BrowserViewModel {
             guard let self, let tab, let briefingVM else { return }
             tab.title = briefingVM.document.query
             self.persistState()
+        }
+    }
+
+    private func updateChatContextIfNeeded(for webVM: WebTabViewModel) {
+        guard let pageURL = webVM.currentURL else { return }
+
+        if let existingChatVM = chatViewModel,
+           isSameChatPage(existingChatVM.pageURL, pageURL) {
+            return
+        }
+
+        let vm = makeChatViewModel()
+        if let snapshot = pageChatSnapshotsByKey[pageURL.chatSessionKey] {
+            vm.restoreConversationHistory(snapshot.conversationHistory)
+        }
+        vm.primePageContext(url: pageURL, title: webVM.pageTitle)
+        chatViewModel = vm
+
+        Task { @MainActor [weak self, weak vm] in
+            guard let self, let vm else { return }
+            await vm.updatePageContext(from: webVM)
+            self.persistChatSnapshotIfNeeded(from: vm)
+        }
+    }
+
+    private func makeChatViewModel() -> ChatViewModel {
+        let claudeClient = ClaudeAPIClient(getAPIKey: { [keychain] in keychain.read(.claudeAPIKey) })
+        let vm = ChatViewModel(claudeClient: claudeClient)
+        vm.onConversationHistoryChange = { [weak self, weak vm] history in
+            guard let self, let vm else { return }
+            self.persistChatSnapshotIfNeeded(from: vm, history: history)
+        }
+        return vm
+    }
+
+    private func persistChatSnapshotIfNeeded(
+        from chatVM: ChatViewModel,
+        history: [ConversationMessage]? = nil
+    ) {
+        guard let pageURL = chatVM.pageURL else { return }
+
+        let resolvedHistory = history ?? chatVM.conversationHistory
+        let key = pageURL.chatSessionKey
+
+        if resolvedHistory.isEmpty {
+            pageChatSnapshotsByKey.removeValue(forKey: key)
+        } else {
+            pageChatSnapshotsByKey[key] = PersistedPageChatSnapshot(
+                pageURL: pageURL,
+                pageTitle: resolvedChatPageTitle(for: chatVM, pageURL: pageURL),
+                conversationHistory: resolvedHistory,
+                updatedAt: Date()
+            )
+            trimPageChatSnapshotsIfNeeded()
+        }
+
+        persistState()
+    }
+
+    private func trimPageChatSnapshotsIfNeeded() {
+        guard pageChatSnapshotsByKey.count > maxPersistedPageChats else { return }
+
+        let sorted = pageChatSnapshotsByKey.values.sorted { $0.updatedAt > $1.updatedAt }
+        let keysToKeep = Set(sorted.prefix(maxPersistedPageChats).map { $0.pageURL.chatSessionKey })
+        pageChatSnapshotsByKey = pageChatSnapshotsByKey.filter { keysToKeep.contains($0.key) }
+    }
+
+    private func resolvedChatPageTitle(for chatVM: ChatViewModel, pageURL: URL) -> String {
+        let trimmedTitle = chatVM.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty {
+            return trimmedTitle
+        }
+        if let persistedTitle = pageChatSnapshotsByKey[pageURL.chatSessionKey]?.pageTitle,
+           !persistedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return persistedTitle
+        }
+        return pageURL.displayHost
+    }
+
+    private func isSameChatPage(_ lhs: URL?, _ rhs: URL?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return true
+        case (.some(let left), .some(let right)):
+            return left.chatSessionKey == right.chatSessionKey
+        default:
+            return false
         }
     }
 
@@ -624,5 +840,9 @@ final class BrowserViewModel {
         case .error(let message):
             return .error(message)
         }
+    }
+
+    private func clamp(_ value: CGFloat, min: CGFloat, max: CGFloat) -> CGFloat {
+        Swift.max(min, Swift.min(max, value))
     }
 }

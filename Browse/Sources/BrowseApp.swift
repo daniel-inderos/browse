@@ -280,6 +280,11 @@ struct BrowseApp: App {
                     browserViewModel.revealIntentBarAndFocus()
                 }
                 .keyboardShortcut("l", modifiers: .command)
+
+                Button(browserViewModel.isChatPaneVisible ? "Hide Chat" : "Chat with Page") {
+                    browserViewModel.toggleChatPane()
+                }
+                .keyboardShortcut("e", modifiers: .command)
             }
 
             CommandGroup(replacing: .saveItem) {

@@ -130,6 +130,25 @@ final class WebTabViewModel: NSObject {
     })();
     """
 
+    /// Extracts the main text content of the current page via JS evaluation.
+    /// Returns up to `maxLength` characters of `document.body.innerText`.
+    func extractPageContent(maxLength: Int = 12_000) async -> String? {
+        guard currentURL != nil else { return nil }
+        let js = """
+        (function() {
+            var text = document.body ? document.body.innerText : '';
+            return text.substring(0, \(maxLength));
+        })();
+        """
+        do {
+            let result = try await webView.evaluateJavaScript(js)
+            return result as? String
+        } catch {
+            print("[Browse/WebTab] Page content extraction failed: \(error)")
+            return nil
+        }
+    }
+
     func navigate(to url: URL) {
         let request = URLRequest(url: url)
         webView.load(request)
