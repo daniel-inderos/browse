@@ -3,6 +3,11 @@ import SwiftUI
 @MainActor
 @Observable
 final class BrowserViewModel {
+    private struct RecentlyClosedTab {
+        let tab: Tab
+        let index: Int
+    }
+
     var tabs: [Tab] = []
     var activeTabID: UUID?
     var isIntentBarFocused: Bool = false
@@ -27,7 +32,7 @@ final class BrowserViewModel {
     private let maxChatPaneHeight: CGFloat = 720
     private var briefingScrollOffsetsByTabID: [UUID: CGFloat] = [:]
     private var intentBarRevealHoverGraceDeadline: Date = .distantPast
-    private var recentlyClosedTabs: [Tab] = []
+    private var recentlyClosedTabs: [RecentlyClosedTab] = []
     private var pageChatSnapshotsByKey: [String: PersistedPageChatSnapshot] = [:]
     private let maxRecentlyClosedTabs = 20
     private let maxPersistedPageChats = 120
@@ -60,10 +65,7 @@ final class BrowserViewModel {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let closedTab = tabs[index]
         briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
-        recentlyClosedTabs.append(closedTab)
-        if recentlyClosedTabs.count > maxRecentlyClosedTabs {
-            recentlyClosedTabs.removeFirst(recentlyClosedTabs.count - maxRecentlyClosedTabs)
-        }
+        rememberClosedTab(closedTab, at: index)
 
         withAnimation(tabAnimation) {
             tabs.remove(at: index)
@@ -88,13 +90,10 @@ final class BrowserViewModel {
 
     func closeOtherTabs(keeping id: UUID) {
         guard tabs.contains(where: { $0.id == id }) else { return }
-        let closedTabs = tabs.filter { $0.id != id }
-        closedTabs.forEach { closedTab in
+        let closedTabs = tabs.enumerated().filter { $0.element.id != id }
+        closedTabs.forEach { originalIndex, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
-            recentlyClosedTabs.append(closedTab)
-        }
-        if recentlyClosedTabs.count > maxRecentlyClosedTabs {
-            recentlyClosedTabs.removeFirst(recentlyClosedTabs.count - maxRecentlyClosedTabs)
+            rememberClosedTab(closedTab, at: originalIndex)
         }
 
         withAnimation(tabAnimation) {
@@ -112,12 +111,9 @@ final class BrowserViewModel {
         guard closeRangeStart < tabs.endIndex else { return }
 
         let closedTabs = Array(tabs[closeRangeStart...])
-        closedTabs.forEach { closedTab in
+        closedTabs.enumerated().forEach { offset, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
-            recentlyClosedTabs.append(closedTab)
-        }
-        if recentlyClosedTabs.count > maxRecentlyClosedTabs {
-            recentlyClosedTabs.removeFirst(recentlyClosedTabs.count - maxRecentlyClosedTabs)
+            rememberClosedTab(closedTab, at: closeRangeStart + offset)
         }
 
         withAnimation(tabAnimation) {
@@ -183,14 +179,16 @@ final class BrowserViewModel {
     }
 
     func reopenLastClosedTab() {
-        guard let reopenedTab = recentlyClosedTabs.popLast() else { return }
+        guard let recentlyClosedTab = recentlyClosedTabs.popLast() else { return }
+        let reopenedTab = recentlyClosedTab.tab
         if reopenedTab.kind == .web, let webVM = reopenedTab.webTabViewModel {
             wireWebTabState(for: reopenedTab, webVM: webVM)
             syncWebTabState(reopenedTab, from: webVM)
         }
 
+        let insertionIndex = min(recentlyClosedTab.index, tabs.count)
         withAnimation(tabAnimation) {
-            tabs.append(reopenedTab)
+            tabs.insert(reopenedTab, at: insertionIndex)
             activeTabID = reopenedTab.id
         }
         reopenedTab.lastAccessedAt = Date()
@@ -202,6 +200,13 @@ final class BrowserViewModel {
             isIntentBarFocused = false
         }
         persistState()
+    }
+
+    private func rememberClosedTab(_ tab: Tab, at index: Int) {
+        recentlyClosedTabs.append(RecentlyClosedTab(tab: tab, index: index))
+        if recentlyClosedTabs.count > maxRecentlyClosedTabs {
+            recentlyClosedTabs.removeFirst(recentlyClosedTabs.count - maxRecentlyClosedTabs)
+        }
     }
 
     func selectTab(_ id: UUID) {
