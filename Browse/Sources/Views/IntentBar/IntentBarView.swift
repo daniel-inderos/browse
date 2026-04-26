@@ -23,23 +23,7 @@ struct IntentBarView: View {
             }
 
             // Input field
-            TextField("Search, ask a question, or enter a URL…", text: $viewModel.text)
-                .font(BrowseFont.intentBar)
-                .textFieldStyle(.plain)
-                .focused($isFocused)
-                .frame(maxWidth: .infinity)
-                .layoutPriority(1)
-                .onSubmit {
-                    if let suggestion = selectedSuggestion {
-                        applySuggestion(suggestion)
-                        return
-                    }
-                    guard !viewModel.text.isEmpty else { return }
-                    let intent = viewModel.submit()
-                    browserVM.handleIntent(intent)
-                    // Let URL updates reflect immediately after navigation starts.
-                    isFocused = false
-                }
+            inputField
 
             // Intent badge
             IntentBadge(classification: viewModel.liveClassification)
@@ -136,10 +120,7 @@ struct IntentBarView: View {
             if focused {
                 isFocused = true
                 selectedSuggestionID = nil
-                DispatchQueue.main.async {
-                    // Keep keyboard flow snappy by selecting any existing text.
-                    selectAllIntentBarText()
-                }
+                selectAllIntentBarTextOnNextRunLoop()
                 if let webVM = browserVM.activeTab?.webTabViewModel, let url = webVM.currentURL {
                     viewModel.setURLDisplay(url)
                 } else {
@@ -153,8 +134,9 @@ struct IntentBarView: View {
         }
         .onChange(of: suggestionSections) { _, sections in
             let availableIDs = Set(sections.flatMap(\.suggestions).map(\.id))
-            if let selectedSuggestionID, !availableIDs.contains(selectedSuggestionID) {
-                self.selectedSuggestionID = nil
+            guard let currentSuggestionID = selectedSuggestionID else { return }
+            if !availableIDs.contains(currentSuggestionID) {
+                selectedSuggestionID = nil
             }
         }
         .onChange(of: browserVM.activeTab?.webTabViewModel?.currentURL) { _, url in
@@ -168,8 +150,26 @@ struct IntentBarView: View {
         NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
     }
 
+    private func selectAllIntentBarTextOnNextRunLoop() {
+        DispatchQueue.main.async {
+            // Let AppKit finish installing the field editor before selecting.
+            selectAllIntentBarText()
+        }
+    }
+
     private var shouldShowSuggestions: Bool {
         isFocused && !suggestionSections.isEmpty
+    }
+
+    private var inputField: some View {
+        SelectAllOnClickTextField(
+            placeholder: "Search, ask a question, or enter a URL…",
+            text: $viewModel.text,
+            isFocused: $isFocused,
+            onSubmit: submitIntentBarText
+        )
+        .frame(maxWidth: .infinity)
+        .layoutPriority(1)
     }
 
     private var flattenedSuggestions: [IntentSuggestion] {
@@ -314,6 +314,18 @@ struct IntentBarView: View {
         selectedSuggestionID = nil
     }
 
+    private func submitIntentBarText() {
+        if let suggestion = selectedSuggestion {
+            applySuggestion(suggestion)
+            return
+        }
+        guard !viewModel.text.isEmpty else { return }
+        let intent = viewModel.submit()
+        browserVM.handleIntent(intent)
+        // Let URL updates reflect immediately after navigation starts.
+        isFocused = false
+    }
+
     private func installKeyEventMonitor() {
         guard keyEventMonitor == nil else { return }
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -419,5 +431,86 @@ struct IntentBarView: View {
                     : (isHoveringBar ? BrowseColor.borderSubtle : Color.clear),
                 lineWidth: isFocused ? 1.5 : 1
             )
+    }
+}
+
+private struct SelectAllOnClickTextField: NSViewRepresentable {
+    let placeholder: String
+    @Binding var text: String
+    var isFocused: FocusState<Bool>.Binding
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, isFocused: isFocused, onSubmit: onSubmit)
+    }
+
+    func makeNSView(context: Context) -> SelectingTextField {
+        let textField = SelectingTextField()
+        textField.placeholderString = placeholder
+        textField.isBordered = false
+        textField.isBezeled = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.font = NSFont.systemFont(ofSize: 14)
+        textField.lineBreakMode = .byTruncatingTail
+        textField.cell?.usesSingleLineMode = true
+        textField.cell?.wraps = false
+        textField.delegate = context.coordinator
+        textField.target = context.coordinator
+        textField.action = #selector(Coordinator.submit)
+        context.coordinator.textField = textField
+        return textField
+    }
+
+    func updateNSView(_ textField: SelectingTextField, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.isFocused = isFocused
+        context.coordinator.onSubmit = onSubmit
+
+        if textField.stringValue != text {
+            textField.stringValue = text
+        }
+
+        guard isFocused.wrappedValue else { return }
+        if textField.window?.firstResponder !== textField.currentEditor() {
+            textField.window?.makeFirstResponder(textField)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+        var isFocused: FocusState<Bool>.Binding
+        var onSubmit: () -> Void
+        weak var textField: SelectingTextField?
+
+        init(text: Binding<String>, isFocused: FocusState<Bool>.Binding, onSubmit: @escaping () -> Void) {
+            self.text = text
+            self.isFocused = isFocused
+            self.onSubmit = onSubmit
+        }
+
+        @objc func submit() {
+            onSubmit()
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            isFocused.wrappedValue = true
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField else { return }
+            text.wrappedValue = textField.stringValue
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            isFocused.wrappedValue = false
+        }
+    }
+
+    final class SelectingTextField: NSTextField {
+        override func mouseDown(with event: NSEvent) {
+            super.mouseDown(with: event)
+            currentEditor()?.selectAll(nil)
+        }
     }
 }
