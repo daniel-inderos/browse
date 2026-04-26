@@ -45,6 +45,18 @@ final class BrowserViewModel {
         tabs.first { $0.id == activeTabID }
     }
 
+    private var shortcutOrderedTabs: [Tab] {
+        let calendar = Calendar.current
+        return tabs.filter { $0.isFavorite }
+            + tabs.filter { $0.isPinned && !$0.isFavorite }
+            + tabs.filter {
+                !$0.isFavorite && !$0.isPinned && calendar.isDateInToday($0.lastAccessedAt)
+            }
+            + tabs.filter {
+                !$0.isFavorite && !$0.isPinned && !calendar.isDateInToday($0.lastAccessedAt)
+            }
+    }
+
     var canReopenClosedTab: Bool {
         !recentlyClosedTabs.isEmpty
     }
@@ -249,13 +261,14 @@ final class BrowserViewModel {
     }
 
     func selectTabByIndex(_ index: Int) {
-        guard index >= 0, index < tabs.count else { return }
-        selectTab(tabs[index].id)
+        let orderedTabs = shortcutOrderedTabs
+        guard index >= 0, index < orderedTabs.count else { return }
+        selectTab(orderedTabs[index].id)
     }
 
     func selectLastTab() {
-        guard let lastIndex = tabs.indices.last else { return }
-        selectTabByIndex(lastIndex)
+        guard let lastTab = shortcutOrderedTabs.last else { return }
+        selectTab(lastTab.id)
     }
 
     func selectNextTab() {
