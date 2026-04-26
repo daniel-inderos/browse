@@ -48,6 +48,7 @@ final class WebTabViewModel: NSObject {
     init(websiteDataStore: WKWebsiteDataStore = .default()) {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = websiteDataStore
+        config.preferences.isElementFullscreenEnabled = true
         let pagePreferences = WKWebpagePreferences()
         pagePreferences.allowsContentJavaScript = true
         pagePreferences.preferredContentMode = .desktop
