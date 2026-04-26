@@ -20,7 +20,7 @@ final class ClaudeAPIClient: Sendable {
     private let getAPIKey: @Sendable () -> String?
     private let session: URLSession
     private let baseURL = URL(string: "https://api.anthropic.com/v1/messages")!
-    private let model = "claude-opus-4-6"
+    private let model = "claude-opus-4-7"
 
     init(getAPIKey: @escaping @Sendable () -> String?, session: URLSession = .shared) {
         self.getAPIKey = getAPIKey
