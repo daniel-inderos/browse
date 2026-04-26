@@ -4,14 +4,15 @@ import AppKit
 // MARK: - Window configuration + traffic-light alignment
 
 /// Custom NSView that configures the hosting NSWindow for a transparent
-/// title bar and continuously repositions the traffic-light buttons so
-/// they sit vertically centred with the tab pills.
+/// title bar and hides the native traffic-light buttons. Browse draws its
+/// own sidebar-hosted controls so they animate with the sidebar.
+@MainActor
 private final class TrafficLightAlignerView: NSView {
-
-    /// Vertical center-Y (from window top) where the traffic lights should land.
-    /// With the vertical sidebar, the traffic lights sit near the top of the sidebar.
-    /// Top spacer is 52 pt; centering the lights at ~20 pt from the top of the window.
-    static let targetCenterY: CGFloat = 20
+    private static let windowButtonTypes: [NSWindow.ButtonType] = [
+        .closeButton,
+        .miniaturizeButton,
+        .zoomButton
+    ]
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -19,42 +20,41 @@ private final class TrafficLightAlignerView: NSView {
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = false
-        // Kick an initial alignment after the first layout pass
-        DispatchQueue.main.async { [weak self] in self?.alignTrafficLights() }
+        hideStandardTrafficLights()
+        DispatchQueue.main.async { [weak self] in self?.hideStandardTrafficLights() }
     }
 
     override func layout() {
         super.layout()
-        alignTrafficLights()
+        hideStandardTrafficLights()
     }
 
-    private func alignTrafficLights() {
+    private func hideStandardTrafficLights() {
         guard let window else { return }
+        let hostViews = trafficLightHostViews(in: window)
 
-        for type: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
-            guard let button = window.standardWindowButton(type),
-                  let container = button.superview else { continue }
-
-            let h = button.frame.height
-            let newY: CGFloat
-            if container.isFlipped {
-                // Flipped: y = 0 is the top of the title-bar view
-                newY = Self.targetCenterY - h / 2
-            } else {
-                newY = container.bounds.height - Self.targetCenterY - h / 2
-            }
-            if abs(button.frame.origin.y - newY) > 0.5 {
-                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: newY))
-            }
+        for type in Self.windowButtonTypes {
+            guard let button = window.standardWindowButton(type) else { continue }
+            button.isHidden = true
+            button.alphaValue = 0
         }
 
-        // Prevent the title-bar container from clipping the repositioned buttons
-        if let close = window.standardWindowButton(.closeButton),
-           let titlebar = close.superview {
-            titlebar.wantsLayer = true
-            titlebar.layer?.masksToBounds = false
-            titlebar.superview?.wantsLayer = true
-            titlebar.superview?.layer?.masksToBounds = false
+        for hostView in hostViews {
+            hostView.isHidden = true
+            hostView.alphaValue = 0
+            hostView.wantsLayer = true
+            hostView.layer?.backgroundColor = NSColor.clear.cgColor
+            hostView.layer?.masksToBounds = false
+        }
+    }
+
+    private func trafficLightHostViews(in window: NSWindow) -> [NSView] {
+        var seenIDs = Set<ObjectIdentifier>()
+        return Self.windowButtonTypes.compactMap { type in
+            guard let hostView = window.standardWindowButton(type)?.superview else { return nil }
+            let id = ObjectIdentifier(hostView)
+            guard seenIDs.insert(id).inserted else { return nil }
+            return hostView
         }
     }
 }
