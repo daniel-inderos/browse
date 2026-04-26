@@ -51,6 +51,8 @@ struct FaviconView: View {
         .animation(.easeOut(duration: 0.2), value: didLoad)
         .task(id: url) {
             guard let url else { return }
+            image = nil
+            didLoad = false
             image = await FaviconService.shared.favicon(
                 for: url,
                 isPrivateBrowsing: browserVM.isPrivateBrowsing
