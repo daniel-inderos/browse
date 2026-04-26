@@ -23,12 +23,34 @@ final class NativeTrafficLightContainerView: NSView {
         .miniaturizeButton,
         .zoomButton
     ]
+    private static let controlSize = NSSize(width: 60, height: 20)
+    private static let buttonXOffsets: [NSWindow.ButtonType: CGFloat] = [
+        .closeButton: 0,
+        .miniaturizeButton: 23,
+        .zoomButton: 46
+    ]
 
     private var originalSuperviewByButton = [NSWindow.ButtonType: NSView]()
     private var originalFrameByButton = [NSWindow.ButtonType: NSRect]()
+    private var originalAutoresizingMaskByButton = [NSWindow.ButtonType: NSView.AutoresizingMask]()
+    private var originalTranslatesAutoresizingMaskByButton = [NSWindow.ButtonType: Bool]()
     private var hostedButtonByType = [NSWindow.ButtonType: NSButton]()
     private weak var observedWindow: NSWindow?
     private var windowObservers = [NSObjectProtocol]()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        autoresizesSubviews = false
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        autoresizesSubviews = false
+    }
+
+    override var intrinsicContentSize: NSSize {
+        Self.controlSize
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -65,8 +87,12 @@ final class NativeTrafficLightContainerView: NSView {
 
                 originalSuperviewByButton[type] = button.superview
                 originalFrameByButton[type] = button.frame
+                originalAutoresizingMaskByButton[type] = button.autoresizingMask
+                originalTranslatesAutoresizingMaskByButton[type] = button.translatesAutoresizingMaskIntoConstraints
 
                 button.removeFromSuperview()
+                button.translatesAutoresizingMaskIntoConstraints = true
+                button.autoresizingMask = []
                 addSubview(button)
             }
 
@@ -95,6 +121,14 @@ final class NativeTrafficLightContainerView: NSView {
                 button.frame = originalFrame
             }
 
+            if let originalAutoresizingMask = originalAutoresizingMaskByButton[type] {
+                button.autoresizingMask = originalAutoresizingMask
+            }
+
+            if let originalTranslatesAutoresizingMask = originalTranslatesAutoresizingMaskByButton[type] {
+                button.translatesAutoresizingMaskIntoConstraints = originalTranslatesAutoresizingMask
+            }
+
             button.isHidden = true
             button.alphaValue = 0
             hostedButtonByType[type] = nil
@@ -102,30 +136,56 @@ final class NativeTrafficLightContainerView: NSView {
     }
 
     private func layoutTrafficLights() {
-        let xOrigins: [NSWindow.ButtonType: CGFloat] = [
-            .closeButton: 0,
-            .miniaturizeButton: 20,
-            .zoomButton: 40
-        ]
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
 
-        for type in Self.windowButtonTypes {
-            guard
-                let button = subviews.first(where: { $0 === window?.standardWindowButton(type) }),
-                let xOrigin = xOrigins[type]
-            else {
-                continue
+            let startX = max(0, (bounds.width - Self.controlSize.width) / 2)
+
+            for type in Self.windowButtonTypes {
+                guard
+                    let standardButton = window?.standardWindowButton(type),
+                    let button = subviews.first(where: { $0 === standardButton }) as? NSButton,
+                    let xOffset = Self.buttonXOffsets[type]
+                else {
+                    continue
+                }
+
+                let size = buttonSize(for: button)
+                button.frame = backingAligned(
+                    CGRect(
+                        x: startX + xOffset,
+                        y: max(0, (bounds.height - size.height) / 2),
+                        width: size.width,
+                        height: size.height
+                    )
+                )
             }
-
-            let size = button.intrinsicContentSize
-            let width = size.width > 0 ? size.width : button.frame.width
-            let height = size.height > 0 ? size.height : button.frame.height
-            button.frame = CGRect(
-                x: xOrigin,
-                y: max(0, (bounds.height - height) / 2),
-                width: width,
-                height: height
-            )
         }
+    }
+
+    private func buttonSize(for button: NSButton) -> NSSize {
+        let intrinsicSize = button.intrinsicContentSize
+        return NSSize(
+            width: intrinsicSize.width > 0 ? intrinsicSize.width : button.frame.width,
+            height: intrinsicSize.height > 0 ? intrinsicSize.height : button.frame.height
+        )
+    }
+
+    private func backingAligned(_ rect: CGRect) -> CGRect {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        guard scale > 0 else { return rect }
+
+        func align(_ value: CGFloat) -> CGFloat {
+            (value * scale).rounded() / scale
+        }
+
+        return CGRect(
+            x: align(rect.origin.x),
+            y: align(rect.origin.y),
+            width: align(rect.size.width),
+            height: align(rect.size.height)
+        )
     }
 
     private func observeFullscreenChangesIfNeeded() {

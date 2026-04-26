@@ -52,9 +52,9 @@ struct TabBarView: View {
     var body: some View {
         VStack(spacing: 0) {
             NativeTrafficLightControls()
-                .frame(width: 62, height: 20)
+                .frame(width: 60, height: 20)
                 .padding(.top, 12)
-                .padding(.leading, 20)
+                .padding(.leading, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 52, alignment: .topLeading)
 
