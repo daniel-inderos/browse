@@ -291,7 +291,12 @@ struct TabBarView: View {
         // .animation(tabListAnimation, value: tabs.map(\.id)) drives
         // the spring for every *non*-dragged item automatically.
         browserVM.tabs.swapAt(sourceIndex, targetIndex)
+        performReorderHapticFeedback()
         return true
+    }
+
+    private func performReorderHapticFeedback() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
     /// Two tabs belong to the same drag section when they share pinned state
