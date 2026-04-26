@@ -66,6 +66,8 @@ struct PersistedTabSnapshot: Codable {
     let kind: TabKind
     let title: String
     let url: URL?
+    let navigationHistory: [URL]?
+    let navigationHistoryIndex: Int?
     let isPinned: Bool
     let createdAt: Date
     let lastAccessedAt: Date

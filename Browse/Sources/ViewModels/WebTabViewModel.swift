@@ -31,10 +31,16 @@ final class WebTabViewModel: NSObject {
     var faviconURL: URL?
     var onStateChange: (() -> Void)?
     var onScrollPositionChange: ((CGFloat) -> Void)?
+    var navigationHistorySnapshot: [URL] { navigationHistory }
+    var navigationHistorySnapshotIndex: Int? { navigationHistoryIndex }
 
     private(set) var webView: WKWebView
     private var observations: [NSKeyValueObservation] = []
     private(set) var scrollOffsetY: CGFloat = 0
+    private var navigationHistory: [URL] = []
+    private var navigationHistoryIndex: Int?
+    private var pendingHistoryLoadIndex: Int?
+    private var usesRestoredNavigationHistoryFallback = false
 
     /// Prevent the handler from being collected while the content controller retains it.
     private var scrollHandler: ScrollMessageHandler?
@@ -154,11 +160,48 @@ final class WebTabViewModel: NSObject {
         webView.load(request)
     }
 
-    func goBack() { webView.goBack() }
-    func goForward() { webView.goForward() }
+    func goBack() {
+        if usesRestoredNavigationHistoryFallback {
+            loadHistoryEntry(offset: -1)
+            return
+        }
+
+        if webView.canGoBack {
+            webView.goBack()
+        } else {
+            loadHistoryEntry(offset: -1)
+        }
+    }
+
+    func goForward() {
+        if usesRestoredNavigationHistoryFallback {
+            loadHistoryEntry(offset: 1)
+            return
+        }
+
+        if webView.canGoForward {
+            webView.goForward()
+        } else {
+            loadHistoryEntry(offset: 1)
+        }
+    }
+
     func reload() { webView.reload() }
     func reloadFromOrigin() { webView.reloadFromOrigin() }
     func stopLoading() { webView.stopLoading() }
+
+    func restoreNavigationHistory(_ urls: [URL], currentIndex: Int?) {
+        navigationHistory = urls
+        if navigationHistory.isEmpty {
+            navigationHistoryIndex = nil
+            usesRestoredNavigationHistoryFallback = false
+        } else {
+            let fallbackIndex = currentIndex ?? navigationHistory.index(before: navigationHistory.endIndex)
+            navigationHistoryIndex = max(0, min(fallbackIndex, navigationHistory.index(before: navigationHistory.endIndex)))
+            usesRestoredNavigationHistoryFallback = navigationHistory.count > 1
+        }
+        updateBackForwardAvailability()
+    }
 
     // MARK: - Scroll handling
 
@@ -166,6 +209,88 @@ final class WebTabViewModel: NSObject {
         guard abs(offsetY - scrollOffsetY) > 0.5 else { return }
         scrollOffsetY = offsetY
         onScrollPositionChange?(offsetY)
+    }
+
+    // MARK: - Navigation history
+
+    private var canGoBackInNavigationHistory: Bool {
+        guard let navigationHistoryIndex else { return false }
+        return navigationHistoryIndex > 0
+    }
+
+    private var canGoForwardInNavigationHistory: Bool {
+        guard let navigationHistoryIndex else { return false }
+        guard !navigationHistory.isEmpty else { return false }
+        return navigationHistoryIndex < navigationHistory.index(before: navigationHistory.endIndex)
+    }
+
+    private func loadHistoryEntry(offset: Int) {
+        guard let navigationHistoryIndex else { return }
+        let nextIndex = navigationHistoryIndex + offset
+        guard navigationHistory.indices.contains(nextIndex) else { return }
+
+        pendingHistoryLoadIndex = nextIndex
+        webView.load(URLRequest(url: navigationHistory[nextIndex]))
+    }
+
+    private func recordNavigationURL(_ url: URL) {
+        defer {
+            updateBackForwardAvailability()
+        }
+
+        guard !navigationHistory.isEmpty, let navigationHistoryIndex else {
+            navigationHistory = [url]
+            navigationHistoryIndex = 0
+            return
+        }
+
+        if navigationHistory.indices.contains(navigationHistoryIndex),
+           navigationHistory[navigationHistoryIndex] == url {
+            return
+        }
+
+        if let pendingHistoryLoadIndex,
+           navigationHistory.indices.contains(pendingHistoryLoadIndex),
+           navigationHistory[pendingHistoryLoadIndex] == url {
+            self.navigationHistoryIndex = pendingHistoryLoadIndex
+            self.pendingHistoryLoadIndex = nil
+            return
+        }
+
+        self.pendingHistoryLoadIndex = nil
+
+        let previousIndex = navigationHistoryIndex - 1
+        if navigationHistory.indices.contains(previousIndex),
+           navigationHistory[previousIndex] == url {
+            self.navigationHistoryIndex = previousIndex
+            return
+        }
+
+        let nextIndex = navigationHistoryIndex + 1
+        if navigationHistory.indices.contains(nextIndex),
+           navigationHistory[nextIndex] == url {
+            self.navigationHistoryIndex = nextIndex
+            return
+        }
+
+        let insertionIndex = navigationHistory.index(after: navigationHistoryIndex)
+        if insertionIndex < navigationHistory.endIndex {
+            navigationHistory.removeSubrange(insertionIndex...)
+        }
+        navigationHistory.append(url)
+        self.navigationHistoryIndex = navigationHistory.index(before: navigationHistory.endIndex)
+    }
+
+    private func updateBackForwardAvailability() {
+        let canGoBack = usesRestoredNavigationHistoryFallback
+            ? canGoBackInNavigationHistory
+            : webView.canGoBack || canGoBackInNavigationHistory
+        let canGoForward = usesRestoredNavigationHistoryFallback
+            ? canGoForwardInNavigationHistory
+            : webView.canGoForward || canGoForwardInNavigationHistory
+
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
     }
 
     // MARK: - KVO observers
@@ -204,6 +329,11 @@ final class WebTabViewModel: NSObject {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.currentURL = webView.url
+                    if let currentURL = self.currentURL {
+                        self.recordNavigationURL(currentURL)
+                    } else {
+                        self.updateBackForwardAvailability()
+                    }
                     if let host = self.currentURL?.host {
                         self.faviconURL = URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=32")
                     } else {
@@ -217,7 +347,7 @@ final class WebTabViewModel: NSObject {
         observations.append(
             webView.observe(\.canGoBack, options: [.initial, .new]) { [weak self] webView, _ in
                 Task { @MainActor [weak self] in
-                    self?.canGoBack = webView.canGoBack
+                    self?.updateBackForwardAvailability()
                     self?.onStateChange?()
                 }
             }
@@ -226,7 +356,7 @@ final class WebTabViewModel: NSObject {
         observations.append(
             webView.observe(\.canGoForward, options: [.initial, .new]) { [weak self] webView, _ in
                 Task { @MainActor [weak self] in
-                    self?.canGoForward = webView.canGoForward
+                    self?.updateBackForwardAvailability()
                     self?.onStateChange?()
                 }
             }
@@ -248,8 +378,7 @@ extension WebTabViewModel: WKNavigationDelegate {
         Task { @MainActor in
             isLoading = false
             pageTitle = webView.title ?? currentURL?.host ?? "Untitled"
-            canGoBack = webView.canGoBack
-            canGoForward = webView.canGoForward
+            updateBackForwardAvailability()
             onStateChange?()
         }
     }
@@ -257,8 +386,7 @@ extension WebTabViewModel: WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             isLoading = false
-            canGoBack = webView.canGoBack
-            canGoForward = webView.canGoForward
+            updateBackForwardAvailability()
             onStateChange?()
         }
     }
@@ -266,6 +394,7 @@ extension WebTabViewModel: WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             isLoading = false
+            updateBackForwardAvailability()
             onStateChange?()
         }
     }

@@ -530,8 +530,12 @@ final class BrowserViewModel {
             if tab.kind == .web {
                 let webVM = WebTabViewModel()
                 tab.webTabViewModel = webVM
+                let history = restoredNavigationHistory(from: snapshot)
+                let historyIndex = restoredNavigationHistoryIndex(from: snapshot, history: history)
+                webVM.restoreNavigationHistory(history, currentIndex: historyIndex)
                 wireWebTabState(for: tab, webVM: webVM)
-                if let url = tab.url {
+                if let url = restoredCurrentURL(from: snapshot, history: history, historyIndex: historyIndex) {
+                    tab.url = url
                     webVM.navigate(to: url)
                 }
             } else if tab.kind == .briefing {
@@ -586,6 +590,8 @@ final class BrowserViewModel {
                 kind: tab.kind,
                 title: tab.title,
                 url: tab.url,
+                navigationHistory: makeNavigationHistorySnapshot(for: tab),
+                navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex,
                 isPinned: tab.isPinned,
                 createdAt: tab.createdAt,
                 lastAccessedAt: tab.lastAccessedAt,
@@ -607,6 +613,40 @@ final class BrowserViewModel {
 
     private func persistState() {
         persistenceStore.save(makePersistedState())
+    }
+
+    private func restoredNavigationHistory(from snapshot: PersistedTabSnapshot) -> [URL] {
+        if let navigationHistory = snapshot.navigationHistory, !navigationHistory.isEmpty {
+            return navigationHistory
+        }
+        return snapshot.url.map { [$0] } ?? []
+    }
+
+    private func restoredNavigationHistoryIndex(
+        from snapshot: PersistedTabSnapshot,
+        history: [URL]
+    ) -> Int? {
+        guard !history.isEmpty else { return nil }
+        let fallbackIndex = snapshot.navigationHistoryIndex ?? history.index(before: history.endIndex)
+        return max(0, min(fallbackIndex, history.index(before: history.endIndex)))
+    }
+
+    private func restoredCurrentURL(
+        from snapshot: PersistedTabSnapshot,
+        history: [URL],
+        historyIndex: Int?
+    ) -> URL? {
+        if let historyIndex, history.indices.contains(historyIndex) {
+            return history[historyIndex]
+        }
+        return snapshot.url
+    }
+
+    private func makeNavigationHistorySnapshot(for tab: Tab) -> [URL]? {
+        if let history = tab.webTabViewModel?.navigationHistorySnapshot, !history.isEmpty {
+            return history
+        }
+        return tab.url.map { [$0] }
     }
 
     private func makePersistedPageChatSnapshots() -> [PersistedPageChatSnapshot]? {
