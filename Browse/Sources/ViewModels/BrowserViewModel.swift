@@ -443,11 +443,15 @@ final class BrowserViewModel {
     }
 
     func reportBriefingScrollOffset(_ offsetY: CGFloat, tabID: UUID) {
-        briefingScrollOffsetsByTabID[tabID] = offsetY
         guard activeTabID == tabID else { return }
         guard activeTab?.kind == .briefing else { return }
+        briefingScrollOffsetsByTabID[tabID] = offsetY
         isIntentBarFocused = false
         isIntentBarVisible = false
+    }
+
+    func briefingScrollOffset(for tabID: UUID) -> CGFloat {
+        briefingScrollOffsetsByTabID[tabID] ?? 0
     }
 
     func hideIntentBarIfReadingPositionActive() {

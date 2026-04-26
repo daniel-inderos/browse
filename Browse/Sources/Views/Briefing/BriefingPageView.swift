@@ -7,6 +7,9 @@ struct BriefingPageView: View {
     let onSourceTap: (URL) -> Void
 
     @State private var shouldFollowStreamingFollowUp = false
+    @State private var scrollPosition = ScrollPosition(edge: .top)
+    @State private var hasResolvedInitialScrollPosition = false
+    @State private var isRestoringScrollPosition = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -32,11 +35,17 @@ struct BriefingPageView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+            .scrollPosition($scrollPosition)
             .onScrollGeometryChange(for: BriefingScrollMetrics.self) { geometry in
                 BriefingScrollMetrics(geometry)
             } action: { oldMetrics, newMetrics in
-                browserVM.reportBriefingScrollOffset(newMetrics.offsetY, tabID: tabID)
+                if hasResolvedInitialScrollPosition && !isRestoringScrollPosition {
+                    browserVM.reportBriefingScrollOffset(newMetrics.offsetY, tabID: tabID)
+                }
                 updateFollowUpAutoScroll(oldMetrics: oldMetrics, newMetrics: newMetrics)
+            }
+            .onAppear {
+                restoreBriefingScrollPosition()
             }
             .onChange(of: viewModel.isStreamingFollowUp) { _, isStreaming in
                 shouldFollowStreamingFollowUp = isStreaming
@@ -225,6 +234,27 @@ struct BriefingPageView: View {
             }
         } else {
             action()
+        }
+    }
+
+    private func restoreBriefingScrollPosition() {
+        guard !hasResolvedInitialScrollPosition else { return }
+
+        let offsetY = browserVM.briefingScrollOffset(for: tabID)
+        guard offsetY > 0 else {
+            hasResolvedInitialScrollPosition = true
+            return
+        }
+
+        isRestoringScrollPosition = true
+        scrollPosition.scrollTo(y: offsetY)
+
+        Task { @MainActor in
+            await Task.yield()
+            scrollPosition.scrollTo(y: offsetY)
+            await Task.yield()
+            isRestoringScrollPosition = false
+            hasResolvedInitialScrollPosition = true
         }
     }
 
