@@ -14,21 +14,34 @@ final class SettingsViewModel {
         case failure(String)
     }
 
-    private let keychain = KeychainService()
+    private let apiKeyStore = APIKeyStore()
+    private var hasLoadedAPIKeys = false
 
-    init() {
-        claudeAPIKey = keychain.read(.claudeAPIKey) ?? ""
-        exaAPIKey = keychain.read(.exaAPIKey) ?? ""
+    func loadAPIKeysIfNeeded() {
+        guard !hasLoadedAPIKeys else { return }
+        hasLoadedAPIKeys = true
+        claudeAPIKey = apiKeyStore.read(.claudeAPIKey) ?? ""
+        exaAPIKey = apiKeyStore.read(.exaAPIKey) ?? ""
+    }
+
+    func setClaudeAPIKey(_ value: String) {
+        claudeAPIKey = value
+        saveClaudeKey()
+    }
+
+    func setExaAPIKey(_ value: String) {
+        exaAPIKey = value
+        saveExaKey()
     }
 
     func saveClaudeKey() {
         guard !claudeAPIKey.isEmpty else { return }
-        try? keychain.save(claudeAPIKey, for: .claudeAPIKey)
+        try? apiKeyStore.save(claudeAPIKey, for: .claudeAPIKey)
     }
 
     func saveExaKey() {
         guard !exaAPIKey.isEmpty else { return }
-        try? keychain.save(exaAPIKey, for: .exaAPIKey)
+        try? apiKeyStore.save(exaAPIKey, for: .exaAPIKey)
     }
 
     @MainActor

@@ -25,7 +25,7 @@ final class BrowserViewModel {
     let isPrivateBrowsing: Bool
 
     private let windowID: UUID
-    private let keychain = KeychainService()
+    private let apiKeyStore = APIKeyStore()
     private let persistenceStore = BrowserPersistenceStore()
     private let allowsStatePersistence: Bool
     private let websiteDataStore: WKWebsiteDataStore
@@ -187,8 +187,8 @@ final class BrowserViewModel {
                 isPinned: sourceTab.isPinned
             )
             if let sourceBriefingVM = sourceTab.briefingViewModel {
-                let exaClient = ExaAPIClient(getAPIKey: { [keychain] in keychain.read(.exaAPIKey) })
-                let claudeClient = ClaudeAPIClient(getAPIKey: { [keychain] in keychain.read(.claudeAPIKey) })
+                let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
+                let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
                 let briefingVM = BriefingViewModel(
                     query: sourceBriefingVM.document.query,
                     exaClient: exaClient,
@@ -498,8 +498,8 @@ final class BrowserViewModel {
     }
 
     private func openBriefing(query: String) {
-        let exaClient = ExaAPIClient(getAPIKey: { [keychain] in keychain.read(.exaAPIKey) })
-        let claudeClient = ClaudeAPIClient(getAPIKey: { [keychain] in keychain.read(.claudeAPIKey) })
+        let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
+        let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
         let vm = BriefingViewModel(query: query, exaClient: exaClient, claudeClient: claudeClient)
 
         if let activeTab, canReuseAsNewTab(activeTab) {
@@ -594,8 +594,8 @@ final class BrowserViewModel {
                     webVM.navigate(to: url)
                 }
             } else if tab.kind == .briefing {
-                let exaClient = ExaAPIClient(getAPIKey: { [keychain] in keychain.read(.exaAPIKey) })
-                let claudeClient = ClaudeAPIClient(getAPIKey: { [keychain] in keychain.read(.claudeAPIKey) })
+                let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
+                let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
                 let briefingVM = BriefingViewModel(
                     query: snapshot.briefing?.document.query ?? snapshot.title,
                     exaClient: exaClient,
@@ -807,7 +807,7 @@ final class BrowserViewModel {
     }
 
     private func makeChatViewModel() -> ChatViewModel {
-        let claudeClient = ClaudeAPIClient(getAPIKey: { [keychain] in keychain.read(.claudeAPIKey) })
+        let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
         let vm = ChatViewModel(claudeClient: claudeClient)
         vm.onConversationHistoryChange = { [weak self, weak vm] history in
             guard let self, let vm else { return }

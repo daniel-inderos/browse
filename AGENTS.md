@@ -17,6 +17,15 @@
 - Before staging or committing, inspect diffs for accidental personal data or secrets.
 - If personal data or a secret is already committed, call it out immediately and rewrite/amend history before pushing when possible.
 
+## Open-source project practices
+
+- Assume changes may be read, reviewed, built, and maintained by outside contributors.
+- Keep setup, build, and test steps reproducible on a clean machine; document any new required tools, services, or environment variables.
+- Avoid depending on private infrastructure, local-only paths, proprietary assets, or undocumented accounts.
+- Preserve license headers and attribution when editing existing files or adding third-party code/assets.
+- Favor clear public-facing names, comments, errors, and documentation over shorthand that only makes sense locally.
+- When adding dependencies, choose actively maintained packages with compatible licenses and avoid unnecessary supply-chain risk.
+
 ## Git rules
 
 - Never run `git add .` or `git add -A` unless I explicitly ask.

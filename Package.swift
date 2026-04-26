@@ -9,14 +9,12 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.0"),
-        .package(url: "https://github.com/kishikawakatsumi/KeychainAccess.git", from: "4.2.2"),
     ],
     targets: [
         .executableTarget(
             name: "Browse",
             dependencies: [
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
-                .product(name: "KeychainAccess", package: "KeychainAccess"),
             ],
             path: "Browse/Sources",
             exclude: ["Resources/Info.plist"]

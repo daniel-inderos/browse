@@ -54,11 +54,11 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                SecureField("API Key", text: $viewModel.claudeAPIKey)
+                SecureField("API Key", text: Binding(
+                    get: { viewModel.claudeAPIKey },
+                    set: { viewModel.setClaudeAPIKey($0) }
+                ))
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: viewModel.claudeAPIKey) { _, _ in
-                        viewModel.saveClaudeKey()
-                    }
 
                 HStack(spacing: 8) {
                     Button("Test Connection") {
@@ -80,11 +80,11 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                SecureField("API Key", text: $viewModel.exaAPIKey)
+                SecureField("API Key", text: Binding(
+                    get: { viewModel.exaAPIKey },
+                    set: { viewModel.setExaAPIKey($0) }
+                ))
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: viewModel.exaAPIKey) { _, _ in
-                        viewModel.saveExaKey()
-                    }
 
                 HStack(spacing: 8) {
                     Button("Test Connection") {
@@ -106,6 +106,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 480, height: 480)
+        .onAppear {
+            viewModel.loadAPIKeysIfNeeded()
+        }
     }
 
     // MARK: - Accent Swatch
