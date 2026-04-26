@@ -6,39 +6,58 @@ struct BriefingPageView: View {
     let tabID: UUID
     let onSourceTap: (URL) -> Void
 
+    @State private var shouldFollowStreamingFollowUp = false
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                switch viewModel.phase {
-                case .idle:
-                    EmptyView()
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    switch viewModel.phase {
+                    case .idle:
+                        EmptyView()
 
-                case .searching:
-                    BriefingSkeletonView(phase: .searching)
+                    case .searching:
+                        BriefingSkeletonView(phase: .searching)
 
-                case .synthesizing, .complete:
-                    briefingContent
+                    case .synthesizing, .complete:
+                        briefingContent
 
-                case .error(let message):
-                    errorView(message)
+                    case .error(let message):
+                        errorView(message)
+                    }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(ScrollTarget.followUpBottom)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .onScrollGeometryChange(for: BriefingScrollMetrics.self) { geometry in
+                BriefingScrollMetrics(geometry)
+            } action: { oldMetrics, newMetrics in
+                browserVM.reportBriefingScrollOffset(newMetrics.offsetY, tabID: tabID)
+                updateFollowUpAutoScroll(oldMetrics: oldMetrics, newMetrics: newMetrics)
+            }
+            .onChange(of: viewModel.isStreamingFollowUp) { _, isStreaming in
+                shouldFollowStreamingFollowUp = isStreaming
+                guard isStreaming else { return }
+                scrollToFollowUpBottom(using: proxy, animated: true)
+            }
+            .onChange(of: viewModel.streamingFollowUp) { _, _ in
+                guard shouldFollowStreamingFollowUp else { return }
+                scrollToFollowUpBottom(using: proxy, animated: false)
+            }
+            .background(briefingPageBackground)
+            .animation(.easeOut(duration: 0.16), value: shouldShowReturnToBottomButton)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if shouldShowFloatingFollowUp {
+                    floatingFollowUpBar(using: proxy)
                 }
             }
-            .frame(maxWidth: .infinity)
+            .environment(\.openURL, OpenURLAction { url in
+                openBriefingURL(url)
+            })
         }
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            max(0, geometry.contentOffset.y + geometry.contentInsets.top)
-        } action: { _, newOffset in
-            browserVM.reportBriefingScrollOffset(newOffset, tabID: tabID)
-        }
-        .background(briefingPageBackground)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if shouldShowFloatingFollowUp {
-                floatingFollowUpBar
-            }
-        }
-        .environment(\.openURL, OpenURLAction { url in
-            openBriefingURL(url)
-        })
     }
 
     // MARK: - Briefing Content
@@ -161,6 +180,10 @@ struct BriefingPageView: View {
         viewModel.phase == .complete || !viewModel.conversationHistory.isEmpty
     }
 
+    private var shouldShowReturnToBottomButton: Bool {
+        viewModel.isStreamingFollowUp && !shouldFollowStreamingFollowUp
+    }
+
     private func openBriefingURL(_ url: URL) -> OpenURLAction.Result {
         if let sourceURL = BriefingCitationResolver.sourceURL(
             for: url,
@@ -175,7 +198,60 @@ struct BriefingPageView: View {
         return .handled
     }
 
-    private var floatingFollowUpBar: some View {
+    private func updateFollowUpAutoScroll(
+        oldMetrics: BriefingScrollMetrics,
+        newMetrics: BriefingScrollMetrics
+    ) {
+        guard viewModel.isStreamingFollowUp else { return }
+
+        if shouldFollowStreamingFollowUp {
+            let didScrollUp = newMetrics.offsetY < oldMetrics.offsetY - 4
+            if didScrollUp && newMetrics.distanceFromBottom > 24 {
+                shouldFollowStreamingFollowUp = false
+            }
+        } else if newMetrics.distanceFromBottom < 24 {
+            shouldFollowStreamingFollowUp = true
+        }
+    }
+
+    private func scrollToFollowUpBottom(using proxy: ScrollViewProxy, animated: Bool) {
+        let action = {
+            proxy.scrollTo(ScrollTarget.followUpBottom, anchor: .bottom)
+        }
+
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) {
+                action()
+            }
+        } else {
+            action()
+        }
+    }
+
+    private func returnToBottomButton(using proxy: ScrollViewProxy) -> some View {
+        Button {
+            shouldFollowStreamingFollowUp = true
+            scrollToFollowUpBottom(using: proxy, animated: true)
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(BrowseColor.accent)
+                .frame(width: 34, height: 34)
+                .background(
+                    Circle()
+                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.96))
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.75)
+                )
+                .shadow(color: BrowseColor.shadowSubtle.opacity(0.5), radius: 6, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .help("Jump to latest follow-up")
+    }
+
+    private func floatingFollowUpBar(using proxy: ScrollViewProxy) -> some View {
         ZStack(alignment: .bottom) {
             LinearGradient(
                 colors: [
@@ -189,12 +265,19 @@ struct BriefingPageView: View {
             .frame(height: 120)
             .allowsHitTesting(false)
 
-            BriefingFollowUp(
-                viewModel: viewModel,
-                showConversationHistory: false,
-                showInput: true,
-                isFloating: true
-            )
+            VStack(spacing: 8) {
+                if shouldShowReturnToBottomButton {
+                    returnToBottomButton(using: proxy)
+                        .transition(.scale(scale: 0.88).combined(with: .opacity))
+                }
+
+                BriefingFollowUp(
+                    viewModel: viewModel,
+                    showConversationHistory: false,
+                    showInput: true,
+                    isFloating: true
+                )
+            }
             .frame(maxWidth: 700, alignment: .leading)
             .padding(.horizontal, 48)
             .padding(.bottom, 16)
@@ -296,5 +379,24 @@ struct PulsingDot: ViewModifier {
                 value: isPulsing
             )
             .onAppear { isPulsing = true }
+    }
+}
+
+private enum ScrollTarget {
+    static let followUpBottom = "follow-up-bottom"
+}
+
+private struct BriefingScrollMetrics: Equatable {
+    let offsetY: CGFloat
+    let distanceFromBottom: CGFloat
+
+    init(_ geometry: ScrollGeometry) {
+        offsetY = max(0, geometry.contentOffset.y + geometry.contentInsets.top)
+
+        let visibleHeight = geometry.containerSize.height
+            - geometry.contentInsets.top
+            - geometry.contentInsets.bottom
+        let maxOffsetY = max(0, geometry.contentSize.height - visibleHeight)
+        distanceFromBottom = max(0, maxOffsetY - offsetY)
     }
 }
