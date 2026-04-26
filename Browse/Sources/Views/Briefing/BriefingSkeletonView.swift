@@ -96,7 +96,7 @@ struct SkeletonLine: View {
         .frame(height: height)
         .onAppear {
             withAnimation(
-                .easeInOut(duration: 1.8)
+                .easeInOut(duration: 1.35)
                 .repeatForever(autoreverses: false)
                 .delay(Double.random(in: 0...0.3))
             ) {
@@ -115,7 +115,7 @@ private struct PulsingEffect: ViewModifier {
         content
             .opacity(isPulsing ? 0.3 : 1.0)
             .animation(
-                .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                .easeInOut(duration: 0.7).repeatForever(autoreverses: true),
                 value: isPulsing
             )
             .onAppear { isPulsing = true }
