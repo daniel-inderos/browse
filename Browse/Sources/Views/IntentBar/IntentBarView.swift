@@ -171,6 +171,8 @@ struct IntentBarView: View {
             isFocused: $isFocused,
             onSubmit: submitIntentBarText,
             onShiftTab: { text in viewModel.toggleSearchBriefMode(text: text) },
+            canNavigateSuggestions: { shouldShowSuggestions },
+            onMoveSelection: { step in moveSelection(step: step) },
             onEditingChange: { isEditing in
                 isTextFieldEditing = isEditing
             }
@@ -486,6 +488,8 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
     var isFocused: FocusState<Bool>.Binding
     let onSubmit: () -> Void
     let onShiftTab: (String) -> Void
+    let canNavigateSuggestions: () -> Bool
+    let onMoveSelection: (Int) -> Void
     let onEditingChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -494,6 +498,8 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
             isFocused: isFocused,
             onSubmit: onSubmit,
             onShiftTab: onShiftTab,
+            canNavigateSuggestions: canNavigateSuggestions,
+            onMoveSelection: onMoveSelection,
             onEditingChange: onEditingChange
         )
     }
@@ -521,6 +527,8 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         context.coordinator.isFocused = isFocused
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onShiftTab = onShiftTab
+        context.coordinator.canNavigateSuggestions = canNavigateSuggestions
+        context.coordinator.onMoveSelection = onMoveSelection
         context.coordinator.onEditingChange = onEditingChange
 
         if textField.stringValue != text {
@@ -538,6 +546,8 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         var isFocused: FocusState<Bool>.Binding
         var onSubmit: () -> Void
         var onShiftTab: (String) -> Void
+        var canNavigateSuggestions: () -> Bool
+        var onMoveSelection: (Int) -> Void
         var onEditingChange: (Bool) -> Void
         weak var textField: SelectingTextField?
 
@@ -546,12 +556,16 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
             isFocused: FocusState<Bool>.Binding,
             onSubmit: @escaping () -> Void,
             onShiftTab: @escaping (String) -> Void,
+            canNavigateSuggestions: @escaping () -> Bool,
+            onMoveSelection: @escaping (Int) -> Void,
             onEditingChange: @escaping (Bool) -> Void
         ) {
             self.text = text
             self.isFocused = isFocused
             self.onSubmit = onSubmit
             self.onShiftTab = onShiftTab
+            self.canNavigateSuggestions = canNavigateSuggestions
+            self.onMoveSelection = onMoveSelection
             self.onEditingChange = onEditingChange
         }
 
@@ -575,10 +589,22 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard commandSelector == #selector(NSResponder.insertBacktab(_:)) else { return false }
-            text.wrappedValue = textView.string
-            onShiftTab(textView.string)
-            return true
+            switch commandSelector {
+            case #selector(NSResponder.insertBacktab(_:)):
+                text.wrappedValue = textView.string
+                onShiftTab(textView.string)
+                return true
+            case #selector(NSResponder.moveDown(_:)):
+                guard canNavigateSuggestions() else { return false }
+                onMoveSelection(1)
+                return true
+            case #selector(NSResponder.moveUp(_:)):
+                guard canNavigateSuggestions() else { return false }
+                onMoveSelection(-1)
+                return true
+            default:
+                return false
+            }
         }
     }
 
