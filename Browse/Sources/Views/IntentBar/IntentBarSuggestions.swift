@@ -5,6 +5,7 @@ struct IntentSuggestion: Identifiable, Hashable {
         case briefingQuery
         case openTab
         case frequentDomain
+        case searchAutocomplete
     }
 
     let id: String
@@ -132,6 +133,8 @@ struct IntentBarSuggestions: View {
             return "safari"
         case .frequentDomain:
             return "globe"
+        case .searchAutocomplete:
+            return "magnifyingglass"
         }
     }
 

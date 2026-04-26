@@ -54,4 +54,26 @@ struct IntentBarViewModelTests {
         #expect(!viewModel.toggleSearchBriefMode())
         #expect(viewModel.submit() == .open(URL(string: "https://apple.com")!))
     }
+
+    @Test("Autocomplete suggestions are available immediately for search text")
+    func autocompleteSuggestionsAreAvailableImmediatelyForSearchText() {
+        let viewModel = IntentBarViewModel()
+        viewModel.text = "the amazing digital c"
+
+        #expect(viewModel.autocompleteSuggestions == [
+            "the amazing digital c news",
+            "the amazing digital c meaning",
+            "the amazing digital c tutorial",
+            "the amazing digital c examples",
+            "the amazing digital c near me"
+        ])
+    }
+
+    @Test("Autocomplete suggestions ignore URL input")
+    func autocompleteSuggestionsIgnoreURLInput() {
+        let viewModel = IntentBarViewModel()
+        viewModel.text = "https://apple.com"
+
+        #expect(viewModel.autocompleteSuggestions.isEmpty)
+    }
 }

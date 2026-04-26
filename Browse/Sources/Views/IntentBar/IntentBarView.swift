@@ -10,6 +10,7 @@ struct IntentBarView: View {
     @State private var pendingAutoHideTask: Task<Void, Never>?
     @State private var keyEventMonitor: Any?
     @State private var selectedSuggestionID: String?
+    @State private var isTextFieldEditing = false
 
     init(onFocusChange: @escaping (Bool) -> Void = { _ in }) {
         self.onFocusChange = onFocusChange
@@ -111,9 +112,13 @@ struct IntentBarView: View {
             pendingAutoHideTask?.cancel()
             pendingAutoHideTask = nil
             removeKeyEventMonitor()
+            isTextFieldEditing = false
             onFocusChange(false)
         }
         .onChange(of: isFocused) { _, focused in
+            if !focused {
+                isTextFieldEditing = false
+            }
             onFocusChange(focused)
         }
         .onChange(of: browserVM.isIntentBarFocused) { _, focused in
@@ -158,7 +163,7 @@ struct IntentBarView: View {
     }
 
     private var shouldShowSuggestions: Bool {
-        isFocused && !suggestionSections.isEmpty
+        isTextFieldEditing && !suggestionSections.isEmpty
     }
 
     private var inputField: some View {
@@ -167,7 +172,10 @@ struct IntentBarView: View {
             text: $viewModel.text,
             isFocused: $isFocused,
             onSubmit: submitIntentBarText,
-            onShiftTab: { text in viewModel.toggleSearchBriefMode(text: text) }
+            onShiftTab: { text in viewModel.toggleSearchBriefMode(text: text) },
+            onEditingChange: { isEditing in
+                isTextFieldEditing = isEditing
+            }
         )
         .frame(maxWidth: .infinity)
         .layoutPriority(1)
@@ -189,8 +197,12 @@ struct IntentBarView: View {
         let recentBriefings = recentBriefingSuggestions(matching: query)
         let openTabs = openTabSuggestions(matching: query)
         let frequentDomains = frequentDomainSuggestions(matching: query)
+        let searchAutocomplete = searchAutocompleteSuggestions(matching: query)
 
         var sections: [IntentSuggestionSection] = []
+        if !searchAutocomplete.isEmpty {
+            sections.append(IntentSuggestionSection(title: "Search Suggestions", suggestions: searchAutocomplete))
+        }
         if !recentBriefings.isEmpty {
             sections.append(IntentSuggestionSection(title: "Recent Briefings", suggestions: recentBriefings))
         }
@@ -229,6 +241,25 @@ struct IntentBarView: View {
         }
 
         return results
+    }
+
+    private func searchAutocompleteSuggestions(matching query: String) -> [IntentSuggestion] {
+        var seen = Set<String>()
+
+        return viewModel.autocompleteSuggestions.compactMap { phrase in
+            let cleaned = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+            let dedupeKey = cleaned.lowercased()
+            guard !cleaned.isEmpty else { return nil }
+            guard dedupeKey != query.lowercased() else { return nil }
+            guard seen.insert(dedupeKey).inserted else { return nil }
+
+            return IntentSuggestion(
+                kind: .searchAutocomplete,
+                title: cleaned,
+                subtitle: "Search the web",
+                fillText: cleaned
+            )
+        }
     }
 
     private func openTabSuggestions(matching query: String) -> [IntentSuggestion] {
@@ -303,6 +334,14 @@ struct IntentBarView: View {
     private func applySuggestion(_ suggestion: IntentSuggestion) {
         if suggestion.kind == .openTab, let tabID = suggestion.tabID {
             browserVM.selectTab(tabID)
+            isFocused = false
+            selectedSuggestionID = nil
+            return
+        }
+
+        if suggestion.kind == .searchAutocomplete {
+            viewModel.text = ""
+            browserVM.handleIntent(.search(query: suggestion.fillText))
             isFocused = false
             selectedSuggestionID = nil
             return
@@ -449,9 +488,16 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
     var isFocused: FocusState<Bool>.Binding
     let onSubmit: () -> Void
     let onShiftTab: (String) -> Void
+    let onEditingChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isFocused: isFocused, onSubmit: onSubmit, onShiftTab: onShiftTab)
+        Coordinator(
+            text: $text,
+            isFocused: isFocused,
+            onSubmit: onSubmit,
+            onShiftTab: onShiftTab,
+            onEditingChange: onEditingChange
+        )
     }
 
     func makeNSView(context: Context) -> SelectingTextField {
@@ -477,6 +523,7 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         context.coordinator.isFocused = isFocused
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onShiftTab = onShiftTab
+        context.coordinator.onEditingChange = onEditingChange
 
         if textField.stringValue != text {
             textField.stringValue = text
@@ -493,18 +540,21 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         var isFocused: FocusState<Bool>.Binding
         var onSubmit: () -> Void
         var onShiftTab: (String) -> Void
+        var onEditingChange: (Bool) -> Void
         weak var textField: SelectingTextField?
 
         init(
             text: Binding<String>,
             isFocused: FocusState<Bool>.Binding,
             onSubmit: @escaping () -> Void,
-            onShiftTab: @escaping (String) -> Void
+            onShiftTab: @escaping (String) -> Void,
+            onEditingChange: @escaping (Bool) -> Void
         ) {
             self.text = text
             self.isFocused = isFocused
             self.onSubmit = onSubmit
             self.onShiftTab = onShiftTab
+            self.onEditingChange = onEditingChange
         }
 
         @objc func submit() {
@@ -513,6 +563,7 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
 
         func controlTextDidBeginEditing(_ notification: Notification) {
             isFocused.wrappedValue = true
+            onEditingChange(true)
         }
 
         func controlTextDidChange(_ notification: Notification) {
@@ -522,6 +573,7 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
 
         func controlTextDidEndEditing(_ notification: Notification) {
             isFocused.wrappedValue = false
+            onEditingChange(false)
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

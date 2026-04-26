@@ -5,14 +5,24 @@ import Combine
 @Observable
 final class IntentBarViewModel {
     var text: String = "" {
-        didSet { scheduleClassification() }
+        didSet {
+            scheduleClassification()
+            scheduleAutocomplete()
+        }
     }
     var liveClassification: IntentClassification?
+    var autocompleteSuggestions: [String] = []
     var isExpanded: Bool = false
 
     private let classifier = IntentClassifier()
+    private let autocompleteService: SearchAutocompleteService
     private var classificationTask: Task<Void, Never>?
+    private var autocompleteTask: Task<Void, Never>?
     private var modeOverride: ModeOverride?
+
+    init(autocompleteService: SearchAutocompleteService = SearchAutocompleteService()) {
+        self.autocompleteService = autocompleteService
+    }
 
     func submit() -> IntentClassification {
         let classification = classifyForCurrentMode(text)
@@ -55,6 +65,38 @@ final class IntentBarViewModel {
         return false
     }
 
+    private func scheduleAutocomplete() {
+        autocompleteTask?.cancel()
+
+        let query = autocompleteQuery(from: text)
+        guard let query else {
+            autocompleteSuggestions = []
+            return
+        }
+
+        autocompleteSuggestions = Self.localAutocompleteSuggestions(for: query)
+
+        guard case .open = classifier.classify(query) else {
+            autocompleteTask = Task { [weak self, autocompleteService] in
+                try? await Task.sleep(for: .milliseconds(220))
+                guard !Task.isCancelled else { return }
+
+                let suggestions = (try? await autocompleteService.suggestions(for: query)) ?? []
+                await MainActor.run {
+                    guard let self else { return }
+                    guard self.autocompleteQuery(from: self.text) == query else { return }
+                    self.autocompleteSuggestions = Self.mergedAutocompleteSuggestions(
+                        suggestions,
+                        fallback: Self.localAutocompleteSuggestions(for: query)
+                    )
+                }
+            }
+            return
+        }
+
+        autocompleteSuggestions = []
+    }
+
     private func scheduleClassification() {
         classificationTask?.cancel()
         classificationTask = Task {
@@ -67,6 +109,40 @@ final class IntentBarViewModel {
                 liveClassification = classifyForCurrentMode(text)
             }
         }
+    }
+
+    private func autocompleteQuery(from input: String) -> String? {
+        let query = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.count >= 2 else { return nil }
+        guard !query.contains("\n") else { return nil }
+        return query
+    }
+
+    private static func localAutocompleteSuggestions(for query: String) -> [String] {
+        [
+            "\(query) news",
+            "\(query) meaning",
+            "\(query) tutorial",
+            "\(query) examples",
+            "\(query) near me"
+        ]
+    }
+
+    private static func mergedAutocompleteSuggestions(_ suggestions: [String], fallback: [String]) -> [String] {
+        var seen = Set<String>()
+        var merged: [String] = []
+
+        for suggestion in suggestions + fallback {
+            let trimmed = suggestion.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = trimmed.lowercased()
+            guard !trimmed.isEmpty else { continue }
+            guard seen.insert(key).inserted else { continue }
+
+            merged.append(trimmed)
+            if merged.count >= 5 { break }
+        }
+
+        return merged
     }
 
     private func classifyForCurrentMode(_ input: String) -> IntentClassification {
