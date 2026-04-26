@@ -33,6 +33,14 @@ struct BrowserWindowConfiguration: Codable, Hashable {
             restoresPersistedState: false
         )
     }
+
+    static func restoredNormal(id: UUID) -> BrowserWindowConfiguration {
+        BrowserWindowConfiguration(
+            id: id,
+            isPrivateBrowsing: false,
+            restoresPersistedState: true
+        )
+    }
 }
 
 private struct BrowserViewModelFocusedKey: FocusedValueKey {
@@ -203,6 +211,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.bringBrowseToFront()
         }
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        BrowserWindowSessionController.shared.markTerminating()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        BrowserWindowSessionController.shared.markTerminating()
+        return .terminateNow
+    }
 }
 
 @main
@@ -211,10 +228,14 @@ struct BrowseApp: App {
 
     var body: some Scene {
         WindowGroup("Browse", for: BrowserWindowConfiguration.self) { configuration in
-            BrowserWindow(configuration: configuration.wrappedValue ?? .initialNormal)
+            BrowserWindow(
+                configuration: configuration.wrappedValue
+                    ?? BrowserWindowSessionController.shared.initialConfiguration()
+            )
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1420, height: 800)
+        .restorationBehavior(.disabled)
         .commands {
             BrowserCommands()
         }

@@ -23,6 +23,7 @@ final class BrowserViewModel {
     var chatViewModel: ChatViewModel?
     let isPrivateBrowsing: Bool
 
+    private let windowID: UUID
     private let keychain = KeychainService()
     private let persistenceStore = BrowserPersistenceStore()
     private let allowsStatePersistence: Bool
@@ -65,12 +66,17 @@ final class BrowserViewModel {
         activeTab?.kind != .briefing && isIntentBarVisible
     }
 
-    init(isPrivateBrowsing: Bool = false, restoresPersistedState: Bool = true) {
+    init(
+        windowID: UUID = UUID(),
+        isPrivateBrowsing: Bool = false,
+        restoresPersistedState: Bool = true
+    ) {
+        self.windowID = windowID
         self.isPrivateBrowsing = isPrivateBrowsing
-        self.allowsStatePersistence = !isPrivateBrowsing && restoresPersistedState
+        self.allowsStatePersistence = !isPrivateBrowsing
         self.websiteDataStore = isPrivateBrowsing ? .nonPersistent() : .default()
 
-        if !restorePersistedState() {
+        if !restoresPersistedState || !restorePersistedState() {
             newTab()
         }
     }
@@ -534,7 +540,7 @@ final class BrowserViewModel {
 
     private func restorePersistedState() -> Bool {
         guard allowsStatePersistence else { return false }
-        guard let persisted = persistenceStore.load() else { return false }
+        guard let persisted = persistenceStore.loadWindowState(forWindowID: windowID) else { return false }
         guard !persisted.tabs.isEmpty else { return false }
         pageChatSnapshotsByKey = [:]
         if let persistedPageChats = persisted.pageChats {
@@ -647,7 +653,7 @@ final class BrowserViewModel {
 
     private func persistState() {
         guard allowsStatePersistence else { return }
-        persistenceStore.save(makePersistedState())
+        persistenceStore.save(makePersistedState(), forWindowID: windowID)
     }
 
     private func restoredNavigationHistory(from snapshot: PersistedTabSnapshot) -> [URL] {

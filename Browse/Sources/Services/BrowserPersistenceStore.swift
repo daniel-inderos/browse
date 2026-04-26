@@ -94,15 +94,103 @@ struct PersistedBrowserState: Codable {
     let pageChats: [PersistedPageChatSnapshot]?
 }
 
+struct PersistedBrowserWindowSnapshot: Codable {
+    let id: UUID
+    let state: PersistedBrowserState
+    let lastUpdatedAt: Date
+}
+
+struct PersistedBrowserWindowSession: Codable {
+    let windows: [PersistedBrowserWindowSnapshot]
+}
+
 struct BrowserPersistenceStore {
     private let fileManager = FileManager.default
     private let fileURL: URL
+    private let sessionFileURL: URL
 
-    init(filename: String = "browser-state.json") {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        let directory = appSupport.appendingPathComponent("Browse", isDirectory: true)
+    init(
+        filename: String = "browser-state.json",
+        sessionFilename: String = "browser-session.json",
+        directoryURL: URL? = nil
+    ) {
+        let directory: URL
+        if let directoryURL {
+            directory = directoryURL
+        } else {
+            let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            directory = appSupport.appendingPathComponent("Browse", isDirectory: true)
+        }
+
         self.fileURL = directory.appendingPathComponent(filename, isDirectory: false)
+        self.sessionFileURL = directory.appendingPathComponent(sessionFilename, isDirectory: false)
+    }
+
+    func loadRestorableWindowIDs() -> [UUID] {
+        loadSession()?.windows
+            .filter { $0.state.isRestorableWindowState }
+            .sorted { $0.lastUpdatedAt < $1.lastUpdatedAt }
+            .map(\.id) ?? []
+    }
+
+    func loadWindowState(
+        forWindowID windowID: UUID,
+        allowsLegacyFallback: Bool = true
+    ) -> PersistedBrowserState? {
+        if let session = loadSession() {
+            return session.windows.first { $0.id == windowID }?.state
+        }
+
+        return allowsLegacyFallback ? load() : nil
+    }
+
+    func save(_ state: PersistedBrowserState, forWindowID windowID: UUID) {
+        do {
+            guard state.isRestorableWindowState else {
+                removeWindowState(forWindowID: windowID)
+                return
+            }
+
+            var snapshots = loadSession()?.windows ?? []
+            let snapshot = PersistedBrowserWindowSnapshot(
+                id: windowID,
+                state: state,
+                lastUpdatedAt: Date()
+            )
+
+            if let index = snapshots.firstIndex(where: { $0.id == windowID }) {
+                snapshots[index] = snapshot
+            } else {
+                snapshots.append(snapshot)
+            }
+
+            try saveSession(PersistedBrowserWindowSession(windows: snapshots))
+        } catch {
+            print("[Browse/Persistence] Failed to save window state: \(error)")
+        }
+    }
+
+    func removeWindowState(forWindowID windowID: UUID) {
+        do {
+            guard var snapshots = loadSession()?.windows else { return }
+            snapshots.removeAll { $0.id == windowID }
+            try saveSession(PersistedBrowserWindowSession(windows: snapshots))
+        } catch {
+            print("[Browse/Persistence] Failed to remove window state: \(error)")
+        }
+    }
+
+    func pruneWindowStates(keepingWindowIDs windowIDs: Set<UUID>) {
+        do {
+            let snapshots = loadSession()?.windows ?? []
+            let prunedSnapshots = snapshots.filter { snapshot in
+                windowIDs.contains(snapshot.id) && snapshot.state.isRestorableWindowState
+            }
+            try saveSession(PersistedBrowserWindowSession(windows: prunedSnapshots))
+        } catch {
+            print("[Browse/Persistence] Failed to prune window states: \(error)")
+        }
     }
 
     func load() -> PersistedBrowserState? {
@@ -130,10 +218,43 @@ struct BrowserPersistenceStore {
         }
     }
 
+    private func loadSession() -> PersistedBrowserWindowSession? {
+        do {
+            let data = try Data(contentsOf: sessionFileURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(PersistedBrowserWindowSession.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    private func saveSession(_ session: PersistedBrowserWindowSession) throws {
+        try ensureDirectoryExists()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(session)
+        try data.write(to: sessionFileURL, options: .atomic)
+    }
+
     private func ensureDirectoryExists() throws {
         let directory = fileURL.deletingLastPathComponent()
         if !fileManager.fileExists(atPath: directory.path) {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+    }
+}
+
+private extension PersistedBrowserState {
+    var isRestorableWindowState: Bool {
+        tabs.contains { snapshot in
+            switch snapshot.kind {
+            case .briefing:
+                return true
+            case .web:
+                return snapshot.url != nil || snapshot.navigationHistory?.isEmpty == false
+            }
         }
     }
 }

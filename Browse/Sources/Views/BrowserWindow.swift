@@ -14,9 +14,23 @@ private final class TrafficLightAlignerView: NSView {
         .zoomButton
     ]
 
+    var onWindowWillClose: (() -> Void)?
+
+    private weak var observedWindow: NSWindow?
+    private var closeObserver: NSObjectProtocol?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            removeCloseObserver()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
+        window.isRestorable = false
+        observeCloseNotification(for: window)
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = false
@@ -59,11 +73,57 @@ private final class TrafficLightAlignerView: NSView {
             return hostView
         }
     }
+
+    private func observeCloseNotification(for window: NSWindow) {
+        guard observedWindow !== window else { return }
+        removeCloseObserver()
+        observedWindow = window
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.onWindowWillClose?()
+            }
+        }
+    }
+
+    private func removeCloseObserver() {
+        if let closeObserver {
+            NotificationCenter.default.removeObserver(closeObserver)
+            self.closeObserver = nil
+        }
+        observedWindow = nil
+    }
 }
 
 private struct WindowAccessor: NSViewRepresentable {
-    func makeNSView(context: Context) -> TrafficLightAlignerView { TrafficLightAlignerView() }
-    func updateNSView(_ nsView: TrafficLightAlignerView, context: Context) {}
+    let onWindowWillClose: () -> Void
+
+    func makeNSView(context: Context) -> TrafficLightAlignerView {
+        let view = TrafficLightAlignerView()
+        view.onWindowWillClose = onWindowWillClose
+        return view
+    }
+
+    func updateNSView(_ nsView: TrafficLightAlignerView, context: Context) {
+        nsView.onWindowWillClose = onWindowWillClose
+    }
+}
+
+private struct WindowSessionRestorer: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                BrowserWindowSessionController.shared.restoreAdditionalWindowsIfNeeded(
+                    openWindow: openWindow
+                )
+            }
+    }
 }
 
 struct BrowserWindow: View {
@@ -71,12 +131,15 @@ struct BrowserWindow: View {
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var navigationKeyEventMonitor: Any?
     @State private var isIntentBarTextFocused = false
+    private let configuration: BrowserWindowConfiguration
     private let intentBarHeight: CGFloat = 42
     private let intentBarRevealHoverHeight: CGFloat = 120
 
     init(configuration: BrowserWindowConfiguration) {
+        self.configuration = configuration
         _browserVM = State(
             initialValue: BrowserViewModel(
+                windowID: configuration.id,
                 isPrivateBrowsing: configuration.isPrivateBrowsing,
                 restoresPersistedState: configuration.restoresPersistedState
             )
@@ -141,11 +204,19 @@ struct BrowserWindow: View {
         .ignoresSafeArea()
         .environment(browserVM)
         .focusedSceneValue(\.browserViewModel, browserVM)
-        .background(WindowAccessor())
+        .background(
+            WindowAccessor {
+                BrowserWindowSessionController.shared.unregisterClosedWindow(
+                    configuration: configuration
+                )
+            }
+        )
+        .background(WindowSessionRestorer())
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeInOut(duration: 0.18), value: browserVM.isTabBarVisible)
         .animation(.easeOut(duration: 0.18), value: browserVM.shouldShowIntentBar)
         .onAppear {
+            BrowserWindowSessionController.shared.registerOpenWindow(configuration: configuration)
             installNavigationKeyEventMonitor()
         }
         .onDisappear {
