@@ -67,6 +67,8 @@ private struct WindowAccessor: NSViewRepresentable {
 struct BrowserWindow: View {
     @Environment(BrowserViewModel.self) private var browserVM
     @State private var sidebarResizeStartWidth: CGFloat?
+    @State private var navigationKeyEventMonitor: Any?
+    @State private var isIntentBarTextFocused = false
     private let intentBarHeight: CGFloat = 42
     private let intentBarRevealHoverHeight: CGFloat = 120
 
@@ -86,7 +88,9 @@ struct BrowserWindow: View {
             // Main content area
             VStack(spacing: 0) {
                 // Intent bar
-                IntentBarView()
+                IntentBarView { focused in
+                    isIntentBarTextFocused = focused
+                }
                     .frame(height: browserVM.isIntentBarVisible ? intentBarHeight : 0, alignment: .top)
                     .opacity(browserVM.isIntentBarVisible ? 1 : 0)
                     .zIndex(2)
@@ -124,6 +128,46 @@ struct BrowserWindow: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeInOut(duration: 0.18), value: browserVM.isTabBarVisible)
         .animation(.easeOut(duration: 0.18), value: browserVM.isIntentBarVisible)
+        .onAppear {
+            installNavigationKeyEventMonitor()
+        }
+        .onDisappear {
+            removeNavigationKeyEventMonitor()
+        }
+    }
+
+    private func installNavigationKeyEventMonitor() {
+        guard navigationKeyEventMonitor == nil else { return }
+        navigationKeyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handleNavigationKeyDown(event)
+        }
+    }
+
+    private func removeNavigationKeyEventMonitor() {
+        if let navigationKeyEventMonitor {
+            NSEvent.removeMonitor(navigationKeyEventMonitor)
+            self.navigationKeyEventMonitor = nil
+        }
+    }
+
+    private func handleNavigationKeyDown(_ event: NSEvent) -> NSEvent? {
+        let shortcutFlags: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        let flags = event.modifierFlags.intersection(shortcutFlags)
+        guard flags == .command else { return event }
+        guard NSApp.keyWindow != nil else { return event }
+        guard browserVM.activeTab?.kind == .web else { return event }
+        guard !isIntentBarTextFocused else { return event }
+
+        switch event.keyCode {
+        case 123: // left arrow
+            browserVM.goBackInActiveTab()
+            return nil
+        case 124: // right arrow
+            browserVM.goForwardInActiveTab()
+            return nil
+        default:
+            return event
+        }
     }
 
     private var sidebarResizeHandle: some View {

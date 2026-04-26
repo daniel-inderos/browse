@@ -3,12 +3,17 @@ import AppKit
 
 struct IntentBarView: View {
     @Environment(BrowserViewModel.self) private var browserVM
+    let onFocusChange: (Bool) -> Void
     @State private var viewModel = IntentBarViewModel()
     @FocusState private var isFocused: Bool
     @State private var isHoveringBar = false
     @State private var pendingAutoHideTask: Task<Void, Never>?
     @State private var keyEventMonitor: Any?
     @State private var selectedSuggestionID: String?
+
+    init(onFocusChange: @escaping (Bool) -> Void = { _ in }) {
+        self.onFocusChange = onFocusChange
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -99,6 +104,7 @@ struct IntentBarView: View {
         .animation(.easeOut(duration: 0.15), value: suggestionSections)
         .onAppear {
             installKeyEventMonitor()
+            onFocusChange(isFocused)
         }
         .onHover { hovering in
             isHoveringBar = hovering
@@ -121,6 +127,10 @@ struct IntentBarView: View {
             pendingAutoHideTask?.cancel()
             pendingAutoHideTask = nil
             removeKeyEventMonitor()
+            onFocusChange(false)
+        }
+        .onChange(of: isFocused) { _, focused in
+            onFocusChange(focused)
         }
         .onChange(of: browserVM.isIntentBarFocused) { _, focused in
             if focused {
