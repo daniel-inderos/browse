@@ -391,6 +391,14 @@ final class BrowserViewModel {
         persistState()
     }
 
+    func setChatPaneWidth(_ width: CGFloat) {
+        let clampedWidth = clamp(width, min: minChatPaneWidth, max: maxChatPaneWidth)
+        guard chatPaneWidth != clampedWidth else { return }
+
+        chatPaneWidth = clampedWidth
+        persistState()
+    }
+
     // MARK: - Intent Handling
 
     func handleIntent(_ classification: IntentClassification) {

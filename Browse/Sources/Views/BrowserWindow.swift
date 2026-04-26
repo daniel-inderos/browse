@@ -298,24 +298,25 @@ struct BrowserWindow: View {
         switch tab.kind {
         case .web:
             if let webVM = tab.webTabViewModel {
-                ZStack {
-                    WebTabView(viewModel: webVM)
+                HStack(spacing: 0) {
+                    ZStack {
+                        WebTabView(viewModel: webVM)
 
-                    // Show the new tab page until the user navigates somewhere
-                    if webVM.currentURL == nil {
-                        newTabPage
-                            .transition(.opacity.animation(.easeOut(duration: 0.25)))
+                        // Show the new tab page until the user navigates somewhere
+                        if webVM.currentURL == nil {
+                            newTabPage
+                                .transition(.opacity.animation(.easeOut(duration: 0.25)))
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    // Floating AI chat pane (self-positioning via GeometryReader)
+                    // Page chat lives as a right sidebar alongside web content.
                     if browserVM.isChatPaneVisible, let chatVM = browserVM.chatViewModel {
                         ChatPaneView(
                             viewModel: chatVM,
-                            initialOffset: browserVM.chatPaneOffset,
                             initialWidth: browserVM.chatPaneWidth,
-                            initialHeight: browserVM.chatPaneHeight,
-                            onGeometryCommit: { offset, width, height in
-                                browserVM.setChatPaneGeometry(offset: offset, width: width, height: height)
+                            onWidthCommit: { width in
+                                browserVM.setChatPaneWidth(width)
                             },
                             onClear: {
                                 browserVM.clearChatForCurrentPage()
@@ -324,7 +325,7 @@ struct BrowserWindow: View {
                                 browserVM.closeChatPane()
                             }
                         )
-                        .transition(.opacity)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
                 .animation(.spring(response: 0.26, dampingFraction: 0.86), value: browserVM.isChatPaneVisible)

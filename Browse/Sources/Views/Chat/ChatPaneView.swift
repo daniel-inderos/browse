@@ -3,75 +3,38 @@ import MarkdownUI
 
 struct ChatPaneView: View {
     @Bindable var viewModel: ChatViewModel
-    var onGeometryCommit: (CGSize, CGFloat, CGFloat) -> Void
+    var onWidthCommit: (CGFloat) -> Void
     var onClear: () -> Void
     var onClose: () -> Void
 
-    private enum ResizeCorner: CaseIterable {
-        case topLeading
-        case topTrailing
-        case bottomLeading
-        case bottomTrailing
-
-        var alignment: Alignment {
-            switch self {
-            case .topLeading:
-                .topLeading
-            case .topTrailing:
-                .topTrailing
-            case .bottomLeading:
-                .bottomLeading
-            case .bottomTrailing:
-                .bottomTrailing
-            }
-        }
-    }
-
-    /// Accumulated offset from the default bottom-trailing anchor.
-    @State private var offset: CGSize
-    @State private var dragStartOffset: CGSize?
-    @State private var dragStartLocation: CGPoint?
-
-    @State private var paneWidth: CGFloat
-    @State private var paneHeight: CGFloat
-    @State private var activeResizeCorner: ResizeCorner?
-    @State private var resizeStartOffset: CGSize?
+    @State private var sidebarWidth: CGFloat
     @State private var resizeStartWidth: CGFloat?
-    @State private var resizeStartHeight: CGFloat?
-    @State private var resizeStartLocation: CGPoint?
     @State private var isClearConfirmationPresented: Bool = false
 
     private let minWidth: CGFloat = 300
     private let maxWidth: CGFloat = 560
-    private let minHeight: CGFloat = 280
-    private let maxHeight: CGFloat = 720
 
     init(
         viewModel: ChatViewModel,
-        initialOffset: CGSize,
         initialWidth: CGFloat,
-        initialHeight: CGFloat,
-        onGeometryCommit: @escaping (CGSize, CGFloat, CGFloat) -> Void,
+        onWidthCommit: @escaping (CGFloat) -> Void,
         onClear: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.viewModel = viewModel
-        self.onGeometryCommit = onGeometryCommit
+        self.onWidthCommit = onWidthCommit
         self.onClear = onClear
         self.onClose = onClose
-        _offset = State(initialValue: initialOffset)
-        _paneWidth = State(initialValue: initialWidth)
-        _paneHeight = State(initialValue: initialHeight)
+        _sidebarWidth = State(initialValue: initialWidth)
     }
 
     var body: some View {
         paneContent
-            .frame(width: paneWidth, height: paneHeight)
-            .offset(x: offset.width, y: offset.height)
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .frame(width: sidebarWidth)
+            .frame(maxHeight: .infinity)
+            .overlay(alignment: .leading) { sidebarResizeHandle }
             .onDisappear {
-                commitGeometry()
+                commitWidth()
             }
     }
 
@@ -83,19 +46,14 @@ struct ChatPaneView: View {
             chatMessages
             chatInputBar
         }
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.92))
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.96))
         .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(BrowseColor.borderSubtle, lineWidth: 0.5)
-        )
-        .shadow(color: BrowseColor.shadowWarm.opacity(0.7), radius: 20, x: 0, y: 8)
-        .shadow(color: .black.opacity(0.06), radius: 2, x: 0, y: 1)
-        .overlay(alignment: .topLeading) { resizeHandle(for: .topLeading) }
-        .overlay(alignment: .topTrailing) { resizeHandle(for: .topTrailing) }
-        .overlay(alignment: .bottomLeading) { resizeHandle(for: .bottomLeading) }
-        .overlay(alignment: .bottomTrailing) { resizeHandle(for: .bottomTrailing) }
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(BrowseColor.borderSubtle)
+                .frame(width: 0.5)
+        }
         .confirmationDialog(
             "Clear chat for this page?",
             isPresented: $isClearConfirmationPresented,
@@ -151,33 +109,6 @@ struct ChatPaneView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color.primary.opacity(0.001))
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { value in
-                    if dragStartOffset == nil {
-                        dragStartOffset = offset
-                        dragStartLocation = value.startLocation
-                    }
-                    if let startOffset = dragStartOffset, let startLocation = dragStartLocation {
-                        offset = CGSize(
-                            width: startOffset.width + (value.location.x - startLocation.x),
-                            height: startOffset.height + (value.location.y - startLocation.y)
-                        )
-                    }
-                }
-                .onEnded { _ in
-                    dragStartOffset = nil
-                    dragStartLocation = nil
-                    commitGeometry()
-                }
-        )
-        .onHover { hovering in
-            if hovering {
-                NSCursor.openHand.push()
-            } else {
-                NSCursor.pop()
-            }
-        }
     }
 
     // MARK: - Messages
@@ -352,119 +283,44 @@ struct ChatPaneView: View {
         }
     }
 
-    // MARK: - Resize Handles
+    // MARK: - Width Resize
 
-    private func resizeHandle(for corner: ResizeCorner) -> some View {
-        Color.clear
-            .frame(width: 16, height: 16)
+    private var sidebarResizeHandle: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.001))
+            .frame(width: 8)
             .contentShape(Rectangle())
-            .gesture(
-                resizeGesture(for: corner)
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if resizeStartWidth == nil {
+                            resizeStartWidth = sidebarWidth
+                        }
+
+                        if let resizeStartWidth {
+                            sidebarWidth = clamp(
+                                resizeStartWidth - value.translation.width,
+                                min: minWidth,
+                                max: maxWidth
+                            )
+                        }
+                    }
+                    .onEnded { _ in
+                        resizeStartWidth = nil
+                        commitWidth()
+                    }
             )
-            .overlay {
-                Circle()
-                    .fill(Color.primary.opacity(0.14))
-                    .frame(width: 4, height: 4)
-            }
             .onHover { hovering in
                 if hovering {
-                    NSCursor.crosshair.push()
+                    NSCursor.resizeLeftRight.push()
                 } else {
                     NSCursor.pop()
                 }
             }
-            .padding(4)
     }
 
-    private func resizeGesture(for corner: ResizeCorner) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .global)
-            .onChanged { value in
-                beginResizeIfNeeded(for: corner, value: value)
-                applyResize(for: corner, value: value)
-            }
-            .onEnded { _ in
-                resetResizeState()
-                commitGeometry()
-            }
-    }
-
-    private func beginResizeIfNeeded(for corner: ResizeCorner, value: DragGesture.Value) {
-        guard activeResizeCorner == nil else { return }
-        activeResizeCorner = corner
-        resizeStartOffset = offset
-        resizeStartWidth = paneWidth
-        resizeStartHeight = paneHeight
-        resizeStartLocation = value.startLocation
-    }
-
-    private func applyResize(for corner: ResizeCorner, value: DragGesture.Value) {
-        guard activeResizeCorner == corner,
-              let startOffset = resizeStartOffset,
-              let startWidth = resizeStartWidth,
-              let startHeight = resizeStartHeight,
-              let startLocation = resizeStartLocation else { return }
-
-        let dx = value.location.x - startLocation.x
-        let dy = value.location.y - startLocation.y
-
-        let startRight = startOffset.width
-        let startBottom = startOffset.height
-        let startLeft = startRight - startWidth
-        let startTop = startBottom - startHeight
-
-        let clampedWidth: CGFloat
-        let clampedHeight: CGFloat
-
-        switch corner {
-        case .topLeading:
-            clampedWidth = clamp(startWidth - dx, min: minWidth, max: maxWidth)
-            clampedHeight = clamp(startHeight - dy, min: minHeight, max: maxHeight)
-            paneWidth = clampedWidth
-            paneHeight = clampedHeight
-            offset = CGSize(width: startRight, height: startBottom)
-
-        case .topTrailing:
-            clampedWidth = clamp(startWidth + dx, min: minWidth, max: maxWidth)
-            clampedHeight = clamp(startHeight - dy, min: minHeight, max: maxHeight)
-            paneWidth = clampedWidth
-            paneHeight = clampedHeight
-            offset = CGSize(
-                width: startLeft + clampedWidth,
-                height: startBottom
-            )
-
-        case .bottomLeading:
-            clampedWidth = clamp(startWidth - dx, min: minWidth, max: maxWidth)
-            clampedHeight = clamp(startHeight + dy, min: minHeight, max: maxHeight)
-            paneWidth = clampedWidth
-            paneHeight = clampedHeight
-            offset = CGSize(
-                width: startRight,
-                height: startTop + clampedHeight
-            )
-
-        case .bottomTrailing:
-            clampedWidth = clamp(startWidth + dx, min: minWidth, max: maxWidth)
-            clampedHeight = clamp(startHeight + dy, min: minHeight, max: maxHeight)
-            paneWidth = clampedWidth
-            paneHeight = clampedHeight
-            offset = CGSize(
-                width: startLeft + clampedWidth,
-                height: startTop + clampedHeight
-            )
-        }
-    }
-
-    private func resetResizeState() {
-        activeResizeCorner = nil
-        resizeStartOffset = nil
-        resizeStartWidth = nil
-        resizeStartHeight = nil
-        resizeStartLocation = nil
-    }
-
-    private func commitGeometry() {
-        onGeometryCommit(offset, paneWidth, paneHeight)
+    private func commitWidth() {
+        onWidthCommit(sidebarWidth)
     }
 
     private func clamp(_ value: CGFloat, min: CGFloat, max: CGFloat) -> CGFloat {
