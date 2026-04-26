@@ -100,10 +100,7 @@ final class BrowserViewModel {
 
             if activeTabID == id {
                 if tabs.isEmpty {
-                    let tab = makeWebTab(title: "New Tab")
-                    tabs.append(tab)
-                    activeTabID = tab.id
-                    tab.lastAccessedAt = Date()
+                    activeTabID = nil
                     isIntentBarVisible = true
                     isIntentBarFocused = true
                 } else {

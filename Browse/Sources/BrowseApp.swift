@@ -249,13 +249,11 @@ private struct BrowserCommands: Commands {
             .keyboardShortcut("t", modifiers: .command)
             .disabled(browserViewModel == nil)
 
-            Button("Close Tab") {
-                if let id = browserViewModel?.activeTabID {
-                    browserViewModel?.closeTab(id)
-                }
+            Button(closeCommandTitle) {
+                closeActiveTabOrWindow()
             }
             .keyboardShortcut("w", modifiers: .command)
-            .disabled(browserViewModel?.activeTabID == nil)
+            .disabled(browserViewModel == nil)
         }
 
         CommandMenu("Tabs") {
@@ -383,5 +381,19 @@ private struct BrowserCommands: Commands {
             .keyboardShortcut("s", modifiers: .command)
             .disabled(browserViewModel == nil)
         }
+    }
+
+    private func closeActiveTabOrWindow() {
+        guard let browserViewModel else { return }
+
+        if let activeTabID = browserViewModel.activeTabID {
+            browserViewModel.closeTab(activeTabID)
+        } else {
+            (NSApp.keyWindow ?? NSApp.mainWindow)?.performClose(nil)
+        }
+    }
+
+    private var closeCommandTitle: String {
+        browserViewModel?.activeTabID == nil ? "Close Window" : "Close Tab"
     }
 }
