@@ -11,6 +11,7 @@ struct TabItemView: View {
     let onCopyURL: () -> Void
     let onDuplicate: () -> Void
     let onTogglePin: () -> Void
+    let onToggleFavorite: () -> Void
 
     @State private var isHovering = false
 
@@ -24,7 +25,8 @@ struct TabItemView: View {
         onCloseTabsBelow: @escaping () -> Void,
         onCopyURL: @escaping () -> Void,
         onDuplicate: @escaping () -> Void,
-        onTogglePin: @escaping () -> Void
+        onTogglePin: @escaping () -> Void,
+        onToggleFavorite: @escaping () -> Void
     ) {
         self.tab = tab
         self.isActive = isActive
@@ -36,6 +38,7 @@ struct TabItemView: View {
         self.onCopyURL = onCopyURL
         self.onDuplicate = onDuplicate
         self.onTogglePin = onTogglePin
+        self.onToggleFavorite = onToggleFavorite
     }
 
     var body: some View {
@@ -95,6 +98,12 @@ struct TabItemView: View {
                 onCopyURL()
             }
             .disabled(tab.webTabViewModel?.currentURL == nil && tab.url == nil)
+            Button(tab.isFavorite ? "Remove from Favorites" : "Add to Favorites") {
+                onToggleFavorite()
+            }
+            Button(tab.isPinned ? "Unpin Tab" : "Pin Tab") {
+                onTogglePin()
+            }
             Button("Duplicate") {
                 onDuplicate()
             }
@@ -140,5 +149,93 @@ struct TabItemView: View {
         .opacity(isHovering || isActive ? 1 : 0)
         .allowsHitTesting(isHovering || isActive)
         .accessibilityHidden(!(isHovering || isActive))
+    }
+}
+
+struct FavoriteTabItemView: View {
+    let tab: Tab
+    let isActive: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+    let onCloseOthers: () -> Void
+    let onCloseTabsBelow: () -> Void
+    let onCopyURL: () -> Void
+    let onDuplicate: () -> Void
+    let onTogglePin: () -> Void
+    let onToggleFavorite: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(tabBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(tabBorder, lineWidth: 0.5)
+                    )
+
+                Group {
+                    if tab.kind == .briefing {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(BrowseColor.briefBadge)
+                    } else {
+                        FaviconView(url: tab.faviconURL ?? tab.url, size: 22)
+                    }
+                }
+                .frame(width: 24, height: 24)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(tab.title)
+        .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Close") {
+                onClose()
+            }
+            Button("Close Others") {
+                onCloseOthers()
+            }
+            Button("Close Tabs Below") {
+                onCloseTabsBelow()
+            }
+            Button("Copy URL") {
+                onCopyURL()
+            }
+            .disabled(tab.webTabViewModel?.currentURL == nil && tab.url == nil)
+            Button("Remove from Favorites") {
+                onToggleFavorite()
+            }
+            Button(tab.isPinned ? "Unpin Tab" : "Pin Tab") {
+                onTogglePin()
+            }
+            Button("Duplicate") {
+                onDuplicate()
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: isHovering)
+        .animation(.easeOut(duration: 0.15), value: isActive)
+    }
+
+    private var tabBackground: Color {
+        if isActive {
+            return BrowseColor.surfaceActive
+        }
+        if isHovering {
+            return BrowseColor.surfaceHover
+        }
+        return Color.primary.opacity(0.045)
+    }
+
+    private var tabBorder: Color {
+        if isActive {
+            return BrowseColor.accent.opacity(0.22)
+        }
+        return Color.primary.opacity(isHovering ? 0.10 : 0.07)
     }
 }

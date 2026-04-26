@@ -21,16 +21,32 @@ struct TabBarView: View {
 
     // MARK: - Sectioned Tab Lists
 
+    private var favoriteTabs: [Tab] {
+        browserVM.tabs.filter { $0.isFavorite }
+    }
+
     private var pinnedTabs: [Tab] {
-        browserVM.tabs.filter { $0.isPinned }
+        browserVM.tabs.filter { $0.isPinned && !$0.isFavorite }
     }
 
     private var todayTabs: [Tab] {
-        browserVM.tabs.filter { !$0.isPinned && Calendar.current.isDateInToday($0.lastAccessedAt) }
+        browserVM.tabs.filter {
+            !$0.isFavorite && !$0.isPinned && Calendar.current.isDateInToday($0.lastAccessedAt)
+        }
     }
 
     private var earlierTabs: [Tab] {
-        browserVM.tabs.filter { !$0.isPinned && !Calendar.current.isDateInToday($0.lastAccessedAt) }
+        browserVM.tabs.filter {
+            !$0.isFavorite && !$0.isPinned && !Calendar.current.isDateInToday($0.lastAccessedAt)
+        }
+    }
+
+    private var hasStandardTabs: Bool {
+        !pinnedTabs.isEmpty || !todayTabs.isEmpty || !earlierTabs.isEmpty
+    }
+
+    private var favoriteGridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 7), count: 3)
     }
 
     var body: some View {
@@ -42,6 +58,22 @@ struct TabBarView: View {
             // Vertical scrollable tab list — sectioned
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 2) {
+                    // --- Favorites Section ---
+                    if !favoriteTabs.isEmpty {
+                        LazyVGrid(columns: favoriteGridColumns, spacing: 7) {
+                            ForEach(favoriteTabs) { tab in
+                                favoriteTabItem(tab)
+                                    .transition(tabTransition)
+                            }
+                        }
+                        .padding(.top, 4)
+                        .padding(.bottom, hasStandardTabs ? 8 : 0)
+
+                        if hasStandardTabs {
+                            sectionDivider
+                        }
+                    }
+
                     // --- Pinned Section ---
                     if !pinnedTabs.isEmpty {
                         sectionHeader("Pinned")
@@ -76,6 +108,7 @@ struct TabBarView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .animation(tabListAnimation, value: browserVM.tabs.map(\.isPinned))
+                .animation(tabListAnimation, value: browserVM.tabs.map(\.isFavorite))
             }
 
             Spacer(minLength: 0)
@@ -89,7 +122,8 @@ struct TabBarView: View {
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 32)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -126,6 +160,29 @@ struct TabBarView: View {
 
     // MARK: - Tab Item with Drag-to-Reorder
 
+    private func favoriteTabItem(_ tab: Tab) -> some View {
+        FavoriteTabItemView(
+            tab: tab,
+            isActive: tab.id == browserVM.activeTabID,
+            onSelect: {
+                guard draggingTabID == nil else { return }
+                browserVM.selectTab(tab.id)
+            },
+            onClose: { browserVM.closeTab(tab.id) },
+            onCloseOthers: { browserVM.closeOtherTabs(keeping: tab.id) },
+            onCloseTabsBelow: { browserVM.closeTabsBelow(tab.id) },
+            onCopyURL: {
+                guard let url = tab.webTabViewModel?.currentURL ?? tab.url else { return }
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(url.absoluteString, forType: .string)
+            },
+            onDuplicate: { browserVM.duplicateTab(tab.id) },
+            onTogglePin: { browserVM.togglePin(tab.id) },
+            onToggleFavorite: { browserVM.toggleFavorite(tab.id) }
+        )
+    }
+
     private func tabItem(_ tab: Tab, compact: Bool) -> some View {
         let isDragging = draggingTabID == tab.id
         let rowHeight = compact ? compactRowHeight : regularRowHeight
@@ -150,7 +207,8 @@ struct TabBarView: View {
                 pasteboard.setString(url.absoluteString, forType: .string)
             },
             onDuplicate: { browserVM.duplicateTab(tab.id) },
-            onTogglePin: { browserVM.togglePin(tab.id) }
+            onTogglePin: { browserVM.togglePin(tab.id) },
+            onToggleFavorite: { browserVM.toggleFavorite(tab.id) }
         )
         // --- Visual feedback for the dragged item ---
         .offset(y: isDragging ? dragOffset : 0)

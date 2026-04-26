@@ -153,6 +153,7 @@ final class BrowserViewModel {
             duplicatedTab = makeWebTab(
                 title: sourceTab.title,
                 url: sourceTab.url,
+                isFavorite: sourceTab.isFavorite,
                 isPinned: sourceTab.isPinned
             )
             duplicatedTab.faviconURL = sourceTab.faviconURL
@@ -166,6 +167,7 @@ final class BrowserViewModel {
             let tab = Tab(
                 kind: .briefing,
                 title: sourceTab.title,
+                isFavorite: sourceTab.isFavorite,
                 isPinned: sourceTab.isPinned
             )
             if let sourceBriefingVM = sourceTab.briefingViewModel {
@@ -299,6 +301,12 @@ final class BrowserViewModel {
     func togglePin(_ id: UUID) {
         guard let tab = tabs.first(where: { $0.id == id }) else { return }
         tab.isPinned.toggle()
+        persistState()
+    }
+
+    func toggleFavorite(_ id: UUID) {
+        guard let tab = tabs.first(where: { $0.id == id }) else { return }
+        tab.isFavorite.toggle()
         persistState()
     }
 
@@ -536,6 +544,7 @@ final class BrowserViewModel {
                 kind: snapshot.kind,
                 title: snapshot.title,
                 url: snapshot.url,
+                isFavorite: snapshot.isFavorite ?? false,
                 isPinned: snapshot.isPinned,
                 createdAt: snapshot.createdAt,
                 lastAccessedAt: snapshot.lastAccessedAt
@@ -606,6 +615,7 @@ final class BrowserViewModel {
                 url: tab.url,
                 navigationHistory: makeNavigationHistorySnapshot(for: tab),
                 navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex,
+                isFavorite: tab.isFavorite,
                 isPinned: tab.isPinned,
                 createdAt: tab.createdAt,
                 lastAccessedAt: tab.lastAccessedAt,
@@ -692,6 +702,7 @@ final class BrowserViewModel {
         title: String,
         url: URL? = nil,
         id: UUID = UUID(),
+        isFavorite: Bool = false,
         isPinned: Bool = false,
         createdAt: Date = Date(),
         lastAccessedAt: Date = Date()
@@ -701,6 +712,7 @@ final class BrowserViewModel {
             kind: .web,
             title: title,
             url: url,
+            isFavorite: isFavorite,
             isPinned: isPinned,
             createdAt: createdAt,
             lastAccessedAt: lastAccessedAt

@@ -15,6 +15,7 @@ final class Tab: Identifiable {
     var faviconURL: URL?
     var tintColor: Color?
     var isLoading: Bool
+    var isFavorite: Bool
     var isPinned: Bool
     var createdAt: Date
     var lastAccessedAt: Date
@@ -35,9 +36,9 @@ final class Tab: Identifiable {
     }
 
     /// Opacity multiplier: 1.0 for fresh tabs, ramps down to ~0.45 for very old tabs.
-    /// Pinned tabs are exempt from decay.
+    /// Favorite and pinned tabs are exempt from decay.
     var decayOpacity: Double {
-        guard !isPinned else { return 1.0 }
+        guard !isFavorite && !isPinned else { return 1.0 }
         let hours = hoursSinceLastAccess
         if hours < 4 { return 1.0 }
         // Clamp between 0.45 and 1.0, decaying over 4..48 hours
@@ -49,6 +50,7 @@ final class Tab: Identifiable {
         kind: TabKind,
         title: String = "New Tab",
         url: URL? = nil,
+        isFavorite: Bool = false,
         isPinned: Bool = false,
         createdAt: Date = Date(),
         lastAccessedAt: Date = Date()
@@ -58,6 +60,7 @@ final class Tab: Identifiable {
         self.title = title
         self.url = url
         self.isLoading = false
+        self.isFavorite = isFavorite
         self.isPinned = isPinned
         self.createdAt = createdAt
         self.lastAccessedAt = lastAccessedAt
