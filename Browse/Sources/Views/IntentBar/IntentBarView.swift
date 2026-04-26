@@ -166,7 +166,8 @@ struct IntentBarView: View {
             placeholder: "Search, ask a question, or enter a URL…",
             text: $viewModel.text,
             isFocused: $isFocused,
-            onSubmit: submitIntentBarText
+            onSubmit: submitIntentBarText,
+            onShiftTab: { text in viewModel.toggleSearchBriefMode(text: text) }
         )
         .frame(maxWidth: .infinity)
         .layoutPriority(1)
@@ -347,6 +348,10 @@ struct IntentBarView: View {
         guard flags.intersection(blockedFlags).isEmpty else { return event }
 
         switch event.keyCode {
+        case 48: // tab
+            guard flags.contains(.shift) else { return event }
+            viewModel.toggleSearchBriefMode(text: activeFieldEditorText)
+            return nil
         case 125: // down
             guard shouldShowSuggestions else { return event }
             moveSelection(step: 1)
@@ -380,6 +385,10 @@ struct IntentBarView: View {
 
         let nextIndex = (currentIndex + step + suggestions.count) % suggestions.count
         selectedSuggestionID = suggestions[nextIndex].id
+    }
+
+    private var activeFieldEditorText: String? {
+        (NSApp.keyWindow?.firstResponder as? NSTextView)?.string
     }
 
     // MARK: - Navigation Buttons
@@ -439,9 +448,10 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
     @Binding var text: String
     var isFocused: FocusState<Bool>.Binding
     let onSubmit: () -> Void
+    let onShiftTab: (String) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, isFocused: isFocused, onSubmit: onSubmit)
+        Coordinator(text: $text, isFocused: isFocused, onSubmit: onSubmit, onShiftTab: onShiftTab)
     }
 
     func makeNSView(context: Context) -> SelectingTextField {
@@ -466,6 +476,7 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.isFocused = isFocused
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onShiftTab = onShiftTab
 
         if textField.stringValue != text {
             textField.stringValue = text
@@ -481,12 +492,19 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         var text: Binding<String>
         var isFocused: FocusState<Bool>.Binding
         var onSubmit: () -> Void
+        var onShiftTab: (String) -> Void
         weak var textField: SelectingTextField?
 
-        init(text: Binding<String>, isFocused: FocusState<Bool>.Binding, onSubmit: @escaping () -> Void) {
+        init(
+            text: Binding<String>,
+            isFocused: FocusState<Bool>.Binding,
+            onSubmit: @escaping () -> Void,
+            onShiftTab: @escaping (String) -> Void
+        ) {
             self.text = text
             self.isFocused = isFocused
             self.onSubmit = onSubmit
+            self.onShiftTab = onShiftTab
         }
 
         @objc func submit() {
@@ -504,6 +522,13 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
 
         func controlTextDidEndEditing(_ notification: Notification) {
             isFocused.wrappedValue = false
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertBacktab(_:)) else { return false }
+            text.wrappedValue = textView.string
+            onShiftTab(textView.string)
+            return true
         }
     }
 
