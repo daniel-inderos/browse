@@ -257,7 +257,7 @@ struct ChatPaneView: View {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 20, height: 20)
+                        .frame(width: 24, height: 24)
                         .background(BrowseColor.accent, in: Circle())
                 }
                 .buttonStyle(.plain)
@@ -266,7 +266,7 @@ struct ChatPaneView: View {
         }
         .disabled(viewModel.isStreaming)
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.vertical, 12)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(BrowseColor.borderSubtle)
