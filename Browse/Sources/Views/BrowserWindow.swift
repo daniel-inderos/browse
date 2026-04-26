@@ -150,12 +150,11 @@ struct BrowserWindow: View {
         HStack(spacing: 0) {
             // Vertical sidebar with tabs (Arc-style)
             if browserVM.isTabBarVisible {
-                HStack(spacing: 0) {
-                    TabBarView()
-                        .frame(width: browserVM.tabBarWidth)
-
-                    sidebarResizeHandle
-                }
+                TabBarView()
+                    .frame(width: browserVM.tabBarWidth)
+                    .overlay(alignment: .trailing) {
+                        sidebarResizeHandle
+                    }
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
 
@@ -261,7 +260,7 @@ struct BrowserWindow: View {
     private var sidebarResizeHandle: some View {
         Rectangle()
             // Keep this view hittable so drag is captured reliably.
-            .fill(Color.primary.opacity(0.001))
+            .fill(Color.clear)
             .frame(width: 8)
             .contentShape(Rectangle())
             .highPriorityGesture(
@@ -285,11 +284,6 @@ struct BrowserWindow: View {
                 } else {
                     NSCursor.pop()
                 }
-            }
-            .overlay(alignment: .center) {
-                Rectangle()
-                    .fill(BrowseColor.borderSubtle)
-                    .frame(width: 0.5)
             }
     }
 

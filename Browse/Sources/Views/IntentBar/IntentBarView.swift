@@ -65,7 +65,7 @@ struct IntentBarView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(intentBarBackground)
         .overlay(intentBarBorder)
         .overlay(alignment: .topLeading) {
@@ -80,8 +80,6 @@ struct IntentBarView: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 3)
         .frame(maxWidth: .infinity)
         .zIndex(2)
         .animation(.easeOut(duration: 0.2), value: isFocused)
@@ -461,7 +459,7 @@ struct IntentBarView: View {
     // MARK: - Bar Styling
 
     private var intentBarBackground: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        Rectangle()
             .fill(.ultraThinMaterial)
             .shadow(
                 color: isFocused ? BrowseColor.shadowWarm : BrowseColor.shadowSubtle,
@@ -472,7 +470,7 @@ struct IntentBarView: View {
     }
 
     private var intentBarBorder: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        Rectangle()
             .strokeBorder(
                 isFocused
                     ? BrowseColor.borderFocused
