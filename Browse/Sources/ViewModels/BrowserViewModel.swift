@@ -12,6 +12,7 @@ final class BrowserViewModel {
     var tabs: [Tab] = []
     var activeTabID: UUID?
     var isIntentBarFocused: Bool = false
+    var intentBarFocusRequestID: Int = 0
     var isIntentBarVisible: Bool = true
     var isIntentBarRevealZoneHovered: Bool = false
     var isTabBarVisible: Bool = true
@@ -91,7 +92,7 @@ final class BrowserViewModel {
         }
         tab.lastAccessedAt = Date()
         isIntentBarVisible = true
-        isIntentBarFocused = true
+        requestIntentBarFocus()
         persistState()
     }
 
@@ -108,7 +109,7 @@ final class BrowserViewModel {
                 if tabs.isEmpty {
                     activeTabID = nil
                     isIntentBarVisible = true
-                    isIntentBarFocused = true
+                    requestIntentBarFocus()
                 } else {
                     let newIndex = min(index, tabs.count - 1)
                     activeTabID = tabs[newIndex].id
@@ -228,7 +229,11 @@ final class BrowserViewModel {
 
         if reopenedTab.kind == .web {
             let currentURL = reopenedTab.webTabViewModel?.currentURL ?? reopenedTab.url
-            isIntentBarFocused = (currentURL == nil)
+            if currentURL == nil {
+                requestIntentBarFocus()
+            } else {
+                isIntentBarFocused = false
+            }
         } else {
             isIntentBarFocused = false
         }
@@ -439,7 +444,12 @@ final class BrowserViewModel {
             return
         }
         revealIntentBar()
+        requestIntentBarFocus()
+    }
+
+    private func requestIntentBarFocus() {
         isIntentBarFocused = true
+        intentBarFocusRequestID += 1
     }
 
     func reportBriefingScrollOffset(_ offsetY: CGFloat, tabID: UUID) {

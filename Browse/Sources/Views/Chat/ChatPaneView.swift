@@ -10,6 +10,7 @@ struct ChatPaneView: View {
     @State private var sidebarWidth: CGFloat
     @State private var resizeStartWidth: CGFloat?
     @State private var isClearConfirmationPresented: Bool = false
+    @FocusState private var isInputFocused: Bool
 
     private let minWidth: CGFloat = 300
     private let maxWidth: CGFloat = 560
@@ -33,6 +34,9 @@ struct ChatPaneView: View {
             .frame(width: sidebarWidth)
             .frame(maxHeight: .infinity)
             .overlay(alignment: .leading) { sidebarResizeHandle }
+            .onAppear {
+                focusInputOnNextRunLoop()
+            }
             .onDisappear {
                 commitWidth()
             }
@@ -250,6 +254,7 @@ struct ChatPaneView: View {
             TextField("Ask\u{2026}", text: $viewModel.inputText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .regular))
+                .focused($isInputFocused)
                 .onSubmit { submitMessage() }
 
             if !viewModel.inputText.isEmpty {
@@ -280,6 +285,12 @@ struct ChatPaneView: View {
         viewModel.inputText = ""
         Task {
             await viewModel.sendMessage(question)
+        }
+    }
+
+    private func focusInputOnNextRunLoop() {
+        DispatchQueue.main.async {
+            isInputFocused = true
         }
     }
 

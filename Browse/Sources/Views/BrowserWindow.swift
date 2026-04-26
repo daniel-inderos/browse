@@ -293,19 +293,20 @@ struct BrowserWindow: View {
         case .web:
             if let webVM = tab.webTabViewModel {
                 HStack(spacing: 0) {
-                    ZStack {
-                        WebTabView(viewModel: webVM)
-
-                        // Show the new tab page until the user navigates somewhere
+                    Group {
                         if webVM.currentURL == nil {
                             newTabPage
                                 .transition(.opacity.animation(.easeOut(duration: 0.25)))
+                        } else {
+                            WebTabView(viewModel: webVM)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // Page chat lives as a right sidebar alongside web content.
-                    if browserVM.isChatPaneVisible, let chatVM = browserVM.chatViewModel {
+                    if webVM.currentURL != nil,
+                       browserVM.isChatPaneVisible,
+                       let chatVM = browserVM.chatViewModel {
                         ChatPaneView(
                             viewModel: chatVM,
                             initialWidth: browserVM.chatPaneWidth,

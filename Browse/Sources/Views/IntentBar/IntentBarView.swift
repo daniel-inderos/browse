@@ -87,6 +87,7 @@ struct IntentBarView: View {
         .animation(.easeOut(duration: 0.15), value: suggestionSections)
         .onAppear {
             installKeyEventMonitor()
+            consumeIntentBarFocusRequestIfNeeded()
             onFocusChange(isFocused)
         }
         .onHover { hovering in
@@ -120,17 +121,11 @@ struct IntentBarView: View {
             onFocusChange(focused)
         }
         .onChange(of: browserVM.isIntentBarFocused) { _, focused in
-            if focused {
-                isFocused = true
-                selectedSuggestionID = nil
-                selectAllIntentBarTextOnNextRunLoop()
-                if let webVM = browserVM.activeTab?.webTabViewModel, let url = webVM.currentURL {
-                    viewModel.setURLDisplay(url)
-                } else {
-                    viewModel.text = ""
-                }
-                browserVM.isIntentBarFocused = false
-            }
+            guard focused else { return }
+            consumeIntentBarFocusRequestIfNeeded()
+        }
+        .onChange(of: browserVM.intentBarFocusRequestID) { _, _ in
+            consumeIntentBarFocusRequestIfNeeded()
         }
         .onChange(of: viewModel.text) { _, _ in
             selectedSuggestionID = nil
@@ -160,6 +155,20 @@ struct IntentBarView: View {
         }
     }
 
+    private func consumeIntentBarFocusRequestIfNeeded() {
+        guard browserVM.isIntentBarFocused else { return }
+        isFocused = true
+        isTextFieldEditing = true
+        selectedSuggestionID = nil
+        selectAllIntentBarTextOnNextRunLoop()
+        if let webVM = browserVM.activeTab?.webTabViewModel, let url = webVM.currentURL {
+            viewModel.setURLDisplay(url)
+        } else {
+            viewModel.text = ""
+        }
+        browserVM.isIntentBarFocused = false
+    }
+
     private var shouldShowSuggestions: Bool {
         isTextFieldEditing && !suggestionSections.isEmpty
     }
@@ -169,6 +178,7 @@ struct IntentBarView: View {
             placeholder: "Search, ask a question, or enter a URL…",
             text: $viewModel.text,
             isFocused: $isFocused,
+            focusRequestID: browserVM.intentBarFocusRequestID,
             onSubmit: submitIntentBarText,
             onShiftTab: { text in viewModel.toggleSearchBriefMode(text: text) },
             canNavigateSuggestions: { shouldShowSuggestions },
@@ -486,6 +496,7 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
     let placeholder: String
     @Binding var text: String
     var isFocused: FocusState<Bool>.Binding
+    let focusRequestID: Int
     let onSubmit: () -> Void
     let onShiftTab: (String) -> Void
     let canNavigateSuggestions: () -> Bool
@@ -525,6 +536,7 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
     func updateNSView(_ textField: SelectingTextField, context: Context) {
         context.coordinator.text = $text
         context.coordinator.isFocused = isFocused
+        context.coordinator.focusRequestID = focusRequestID
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onShiftTab = onShiftTab
         context.coordinator.canNavigateSuggestions = canNavigateSuggestions
@@ -535,12 +547,12 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
             textField.stringValue = text
         }
 
-        guard isFocused.wrappedValue else { return }
-        if textField.window?.firstResponder !== textField.currentEditor() {
-            textField.window?.makeFirstResponder(textField)
-        }
+        let isNewFocusRequest = context.coordinator.lastHandledFocusRequestID != focusRequestID
+        context.coordinator.lastHandledFocusRequestID = focusRequestID
+        context.coordinator.focusTextFieldIfNeeded(selectAll: isNewFocusRequest)
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var text: Binding<String>
         var isFocused: FocusState<Bool>.Binding
@@ -549,6 +561,8 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
         var canNavigateSuggestions: () -> Bool
         var onMoveSelection: (Int) -> Void
         var onEditingChange: (Bool) -> Void
+        var focusRequestID: Int = 0
+        var lastHandledFocusRequestID: Int = 0
         weak var textField: SelectingTextField?
 
         init(
@@ -571,6 +585,41 @@ private struct SelectAllOnClickTextField: NSViewRepresentable {
 
         @objc func submit() {
             onSubmit()
+        }
+
+        func focusTextFieldIfNeeded(selectAll: Bool) {
+            guard isFocused.wrappedValue || selectAll else { return }
+            focusTextField(selectAll: selectAll)
+
+            DispatchQueue.main.async { [weak self] in
+                self?.focusTextField(selectAll: selectAll)
+            }
+
+            guard selectAll else { return }
+            let requestID = focusRequestID
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.retryFocusTextField(for: requestID)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.retryFocusTextField(for: requestID)
+            }
+        }
+
+        private func retryFocusTextField(for requestID: Int) {
+            guard lastHandledFocusRequestID == requestID else { return }
+            isFocused.wrappedValue = true
+            focusTextField(selectAll: false)
+        }
+
+        private func focusTextField(selectAll: Bool) {
+            guard let textField else { return }
+            guard let window = textField.window else { return }
+            if window.firstResponder !== textField.currentEditor() {
+                window.makeFirstResponder(textField)
+            }
+            if selectAll {
+                textField.currentEditor()?.selectAll(nil)
+            }
         }
 
         func controlTextDidBeginEditing(_ notification: Notification) {
