@@ -65,12 +65,21 @@ private struct WindowAccessor: NSViewRepresentable {
 }
 
 struct BrowserWindow: View {
-    @Environment(BrowserViewModel.self) private var browserVM
+    @State private var browserVM: BrowserViewModel
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var navigationKeyEventMonitor: Any?
     @State private var isIntentBarTextFocused = false
     private let intentBarHeight: CGFloat = 42
     private let intentBarRevealHoverHeight: CGFloat = 120
+
+    init(configuration: BrowserWindowConfiguration) {
+        _browserVM = State(
+            initialValue: BrowserViewModel(
+                isPrivateBrowsing: configuration.isPrivateBrowsing,
+                restoresPersistedState: configuration.restoresPersistedState
+            )
+        )
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -128,6 +137,8 @@ struct BrowserWindow: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .ignoresSafeArea()
+        .environment(browserVM)
+        .focusedSceneValue(\.browserViewModel, browserVM)
         .background(WindowAccessor())
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeInOut(duration: 0.18), value: browserVM.isTabBarVisible)
@@ -265,6 +276,18 @@ struct BrowserWindow: View {
         ZStack {
             newTabBackground
             VStack(spacing: 16) {
+                if browserVM.isPrivateBrowsing {
+                    Label("Private Browsing", systemImage: "eye.slash")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(BrowseColor.accent)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(BrowseColor.accent.opacity(0.08))
+                        )
+                }
+
                 Text(greetingMessage)
                     .font(.system(size: 48, weight: .semibold, design: .serif))
                     .foregroundStyle(.primary.opacity(0.85))

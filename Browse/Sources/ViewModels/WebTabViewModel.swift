@@ -45,8 +45,9 @@ final class WebTabViewModel: NSObject {
     /// Prevent the handler from being collected while the content controller retains it.
     private var scrollHandler: ScrollMessageHandler?
 
-    override init() {
+    init(websiteDataStore: WKWebsiteDataStore = .default()) {
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = websiteDataStore
         let pagePreferences = WKWebpagePreferences()
         pagePreferences.allowsContentJavaScript = true
         pagePreferences.preferredContentMode = .desktop

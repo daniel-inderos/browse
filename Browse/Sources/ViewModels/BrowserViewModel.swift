@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 @MainActor
 @Observable
@@ -20,9 +21,12 @@ final class BrowserViewModel {
     var chatPaneWidth: CGFloat = 380
     var chatPaneHeight: CGFloat = 480
     var chatViewModel: ChatViewModel?
+    let isPrivateBrowsing: Bool
 
     private let keychain = KeychainService()
     private let persistenceStore = BrowserPersistenceStore()
+    private let allowsStatePersistence: Bool
+    private let websiteDataStore: WKWebsiteDataStore
     private let tabAnimation: Animation = .spring(response: 0.26, dampingFraction: 0.86)
     private let readingScrollHideThreshold: CGFloat = 24
     private let intentBarRevealHoverGraceDuration: TimeInterval = 0.45
@@ -41,11 +45,19 @@ final class BrowserViewModel {
         tabs.first { $0.id == activeTabID }
     }
 
+    var canReopenClosedTab: Bool {
+        !recentlyClosedTabs.isEmpty
+    }
+
     var shouldShowIntentBar: Bool {
         activeTab?.kind != .briefing && isIntentBarVisible
     }
 
-    init() {
+    init(isPrivateBrowsing: Bool = false, restoresPersistedState: Bool = true) {
+        self.isPrivateBrowsing = isPrivateBrowsing
+        self.allowsStatePersistence = !isPrivateBrowsing && restoresPersistedState
+        self.websiteDataStore = isPrivateBrowsing ? .nonPersistent() : .default()
+
         if !restorePersistedState() {
             newTab()
         }
@@ -207,6 +219,7 @@ final class BrowserViewModel {
     }
 
     private func rememberClosedTab(_ tab: Tab, at index: Int) {
+        guard !isPrivateBrowsing else { return }
         recentlyClosedTabs.append(RecentlyClosedTab(tab: tab, index: index))
         if recentlyClosedTabs.count > maxRecentlyClosedTabs {
             recentlyClosedTabs.removeFirst(recentlyClosedTabs.count - maxRecentlyClosedTabs)
@@ -417,7 +430,7 @@ final class BrowserViewModel {
     private func openURL(_ url: URL) {
         if let activeTab, activeTab.kind == .web {
             if activeTab.webTabViewModel == nil {
-                let vm = WebTabViewModel()
+                let vm = WebTabViewModel(websiteDataStore: websiteDataStore)
                 activeTab.webTabViewModel = vm
                 wireWebTabState(for: activeTab, webVM: vm)
             }
@@ -502,6 +515,7 @@ final class BrowserViewModel {
     // MARK: - Persistence
 
     private func restorePersistedState() -> Bool {
+        guard allowsStatePersistence else { return false }
         guard let persisted = persistenceStore.load() else { return false }
         guard !persisted.tabs.isEmpty else { return false }
         pageChatSnapshotsByKey = [:]
@@ -528,7 +542,7 @@ final class BrowserViewModel {
             )
 
             if tab.kind == .web {
-                let webVM = WebTabViewModel()
+                let webVM = WebTabViewModel(websiteDataStore: websiteDataStore)
                 tab.webTabViewModel = webVM
                 let history = restoredNavigationHistory(from: snapshot)
                 let historyIndex = restoredNavigationHistoryIndex(from: snapshot, history: history)
@@ -612,6 +626,7 @@ final class BrowserViewModel {
     }
 
     private func persistState() {
+        guard allowsStatePersistence else { return }
         persistenceStore.save(makePersistedState())
     }
 
@@ -690,7 +705,7 @@ final class BrowserViewModel {
             createdAt: createdAt,
             lastAccessedAt: lastAccessedAt
         )
-        let webVM = WebTabViewModel()
+        let webVM = WebTabViewModel(websiteDataStore: websiteDataStore)
         tab.webTabViewModel = webVM
         wireWebTabState(for: tab, webVM: webVM)
         return tab
@@ -733,7 +748,8 @@ final class BrowserViewModel {
         }
 
         let vm = makeChatViewModel()
-        if let snapshot = pageChatSnapshotsByKey[pageURL.chatSessionKey] {
+        if !isPrivateBrowsing,
+           let snapshot = pageChatSnapshotsByKey[pageURL.chatSessionKey] {
             vm.restoreConversationHistory(snapshot.conversationHistory)
         }
         vm.primePageContext(url: pageURL, title: webVM.pageTitle)
@@ -760,6 +776,7 @@ final class BrowserViewModel {
         from chatVM: ChatViewModel,
         history: [ConversationMessage]? = nil
     ) {
+        guard !isPrivateBrowsing else { return }
         guard let pageURL = chatVM.pageURL else { return }
 
         let resolvedHistory = history ?? chatVM.conversationHistory

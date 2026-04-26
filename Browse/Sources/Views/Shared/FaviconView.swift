@@ -4,6 +4,7 @@ struct FaviconView: View {
     let url: URL?
     var size: CGFloat = 16
 
+    @Environment(BrowserViewModel.self) private var browserVM
     @State private var image: NSImage?
     @State private var didLoad = false
 
@@ -50,7 +51,10 @@ struct FaviconView: View {
         .animation(.easeOut(duration: 0.2), value: didLoad)
         .task(id: url) {
             guard let url else { return }
-            image = await FaviconService.shared.favicon(for: url)
+            image = await FaviconService.shared.favicon(
+                for: url,
+                isPrivateBrowsing: browserVM.isPrivateBrowsing
+            )
             didLoad = image != nil
         }
     }
