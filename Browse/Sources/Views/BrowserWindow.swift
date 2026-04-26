@@ -4,8 +4,8 @@ import AppKit
 // MARK: - Window configuration + traffic-light alignment
 
 /// Custom NSView that configures the hosting NSWindow for a transparent
-/// title bar and hides the native traffic-light buttons. Browse draws its
-/// own sidebar-hosted controls so they animate with the sidebar.
+/// title bar. Browse hosts the native traffic-light buttons in the sidebar
+/// when that sidebar is visible, and otherwise keeps the titlebar copy hidden.
 @MainActor
 private final class TrafficLightAlignerView: NSView {
     private static let windowButtonTypes: [NSWindow.ButtonType] = [
@@ -35,11 +35,13 @@ private final class TrafficLightAlignerView: NSView {
 
         for type in Self.windowButtonTypes {
             guard let button = window.standardWindowButton(type) else { continue }
+            guard !(button.superview is NativeTrafficLightContainerView) else { continue }
             button.isHidden = true
             button.alphaValue = 0
         }
 
         for hostView in hostViews {
+            guard !(hostView is NativeTrafficLightContainerView) else { continue }
             hostView.isHidden = true
             hostView.alphaValue = 0
             hostView.wantsLayer = true

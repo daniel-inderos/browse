@@ -51,7 +51,10 @@ struct TabBarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TrafficLightControls()
+            NativeTrafficLightControls()
+                .frame(width: 62, height: 20)
+                .padding(.top, 12)
+                .padding(.leading, 20)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 52, alignment: .topLeading)
 
@@ -298,68 +301,5 @@ struct TabBarView: View {
         if a.isPinned { return true }
         return Calendar.current.isDateInToday(a.lastAccessedAt)
             == Calendar.current.isDateInToday(b.lastAccessedAt)
-    }
-}
-
-private struct TrafficLightControls: View {
-    @State private var isHovering = false
-
-    var body: some View {
-        HStack(spacing: 12) {
-            trafficLight(
-                color: Color(red: 1.0, green: 0.36, blue: 0.33),
-                symbol: "xmark",
-                accessibilityLabel: "Close",
-                action: { activeWindow?.performClose(nil) }
-            )
-
-            trafficLight(
-                color: Color(red: 1.0, green: 0.76, blue: 0.10),
-                symbol: "minus",
-                accessibilityLabel: "Minimize",
-                action: { activeWindow?.miniaturize(nil) }
-            )
-
-            trafficLight(
-                color: Color(red: 0.13, green: 0.80, blue: 0.27),
-                symbol: "plus",
-                accessibilityLabel: "Zoom",
-                action: { activeWindow?.zoom(nil) }
-            )
-        }
-        .padding(.top, 13)
-        .padding(.leading, 20)
-        .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-    }
-
-    private var activeWindow: NSWindow? {
-        NSApp.keyWindow ?? NSApp.mainWindow
-    }
-
-    private func trafficLight(
-        color: Color,
-        symbol: String,
-        accessibilityLabel: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Circle()
-                .fill(color)
-                .frame(width: 13, height: 13)
-                .overlay {
-                    Image(systemName: symbol)
-                        .font(.system(size: 5.5, weight: .heavy))
-                        .foregroundStyle(Color.black.opacity(0.58))
-                        .opacity(isHovering ? 1 : 0)
-                }
-                .overlay {
-                    Circle()
-                        .strokeBorder(Color.black.opacity(0.16), lineWidth: 0.5)
-                }
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
     }
 }
