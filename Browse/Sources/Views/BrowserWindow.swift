@@ -88,12 +88,14 @@ struct BrowserWindow: View {
             // Main content area
             VStack(spacing: 0) {
                 // Intent bar
-                IntentBarView { focused in
-                    isIntentBarTextFocused = focused
+                if browserVM.activeTab?.kind != .briefing {
+                    IntentBarView { focused in
+                        isIntentBarTextFocused = focused
+                    }
+                        .frame(height: browserVM.shouldShowIntentBar ? intentBarHeight : 0, alignment: .top)
+                        .opacity(browserVM.shouldShowIntentBar ? 1 : 0)
+                        .zIndex(2)
                 }
-                    .frame(height: browserVM.isIntentBarVisible ? intentBarHeight : 0, alignment: .top)
-                    .opacity(browserVM.isIntentBarVisible ? 1 : 0)
-                    .zIndex(2)
 
                 // Content area
                 Group {
@@ -110,16 +112,18 @@ struct BrowserWindow: View {
                 // Invisible hover strip along the top edge.
                 // When the intent bar is hidden and the cursor reaches
                 // this zone, the bar slides back into view.
-                Rectangle()
-                    .fill(Color.primary.opacity(0.001))
-                    .frame(
-                        height: browserVM.isIntentBarVisible
-                            ? 16
-                            : intentBarRevealHoverHeight
-                    )
-                    .onHover { isHovering in
-                        browserVM.setIntentBarRevealZoneHovering(isHovering)
-                    }
+                if browserVM.activeTab?.kind != .briefing {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.001))
+                        .frame(
+                            height: browserVM.shouldShowIntentBar
+                                ? 16
+                                : intentBarRevealHoverHeight
+                        )
+                        .onHover { isHovering in
+                            browserVM.setIntentBarRevealZoneHovering(isHovering)
+                        }
+                }
             }
         }
         .frame(minWidth: 900, minHeight: 600)
@@ -127,7 +131,7 @@ struct BrowserWindow: View {
         .background(WindowAccessor())
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeInOut(duration: 0.18), value: browserVM.isTabBarVisible)
-        .animation(.easeOut(duration: 0.18), value: browserVM.isIntentBarVisible)
+        .animation(.easeOut(duration: 0.18), value: browserVM.shouldShowIntentBar)
         .onAppear {
             installNavigationKeyEventMonitor()
         }

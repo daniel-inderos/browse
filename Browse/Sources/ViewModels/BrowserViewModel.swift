@@ -41,6 +41,10 @@ final class BrowserViewModel {
         tabs.first { $0.id == activeTabID }
     }
 
+    var shouldShowIntentBar: Bool {
+        activeTab?.kind != .briefing && isIntentBarVisible
+    }
+
     init() {
         if !restorePersistedState() {
             newTab()
@@ -369,6 +373,7 @@ final class BrowserViewModel {
     }
 
     func revealIntentBar() {
+        guard activeTab?.kind != .briefing else { return }
         isIntentBarVisible = true
     }
 
@@ -383,6 +388,11 @@ final class BrowserViewModel {
     }
 
     func revealIntentBarAndFocus() {
+        guard activeTab?.kind != .briefing else {
+            isIntentBarFocused = false
+            isIntentBarVisible = false
+            return
+        }
         revealIntentBar()
         isIntentBarFocused = true
     }
@@ -391,7 +401,8 @@ final class BrowserViewModel {
         briefingScrollOffsetsByTabID[tabID] = offsetY
         guard activeTabID == tabID else { return }
         guard activeTab?.kind == .briefing else { return }
-        updateIntentBarVisibility(for: offsetY)
+        isIntentBarFocused = false
+        isIntentBarVisible = false
     }
 
     func hideIntentBarIfReadingPositionActive() {
@@ -782,8 +793,8 @@ final class BrowserViewModel {
             let offsetY = activeTab.webTabViewModel?.scrollOffsetY ?? 0
             updateIntentBarVisibility(for: offsetY)
         case .briefing:
-            let offsetY = briefingScrollOffsetsByTabID[activeTab.id] ?? 0
-            updateIntentBarVisibility(for: offsetY)
+            isIntentBarFocused = false
+            isIntentBarVisible = false
         }
     }
 
