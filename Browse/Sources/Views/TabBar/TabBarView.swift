@@ -122,8 +122,7 @@ struct TabBarView: View {
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
                 .frame(height: 32)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -132,7 +131,7 @@ struct TabBarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 8)
+            .padding(.leading, 8)
             .padding(.bottom, 10)
         }
         .background(BrowseColor.tabBarBackground)
