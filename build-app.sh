@@ -79,10 +79,28 @@ cp "$INFO_PLIST" "$APP_BUNDLE/Contents/Info.plist"
 # Write PkgInfo (standard for APPL bundles; helps Finder/LaunchServices identify the bundle type)
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 
-# ── Ad-hoc code signing ────────────────────────────────────
+# ── Code signing ────────────────────────────────────────────
 echo ""
-echo "==> Code-signing (ad-hoc) with entitlements..."
-codesign --sign - \
+SIGNING_IDENTITY="${BROWSE_SIGNING_IDENTITY:-}"
+if [ -z "$SIGNING_IDENTITY" ]; then
+    SIGNING_IDENTITY="$(security find-identity -v -p codesigning \
+        | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
+        | head -n 1)"
+fi
+
+if [ -n "$SIGNING_IDENTITY" ] && security find-identity -v -p codesigning | grep -Fq "\"$SIGNING_IDENTITY\""; then
+    echo "==> Code-signing with identity: $SIGNING_IDENTITY"
+else
+    if [ -n "$SIGNING_IDENTITY" ]; then
+        echo "WARNING: Signing identity not found: $SIGNING_IDENTITY"
+    else
+        echo "WARNING: No Apple Development signing identity found."
+    fi
+    echo "         Falling back to ad-hoc signing."
+    SIGNING_IDENTITY="-"
+fi
+
+codesign --sign "$SIGNING_IDENTITY" \
          --force \
          --entitlements "$ENTITLEMENTS" \
          --generate-entitlement-der \
