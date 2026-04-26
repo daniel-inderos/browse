@@ -337,9 +337,7 @@ final class BrowserViewModel {
     }
 
     func toggleTabBarVisibility() {
-        withAnimation(.easeInOut(duration: 0.18)) {
-            isTabBarVisible.toggle()
-        }
+        isTabBarVisible.toggle()
         persistState()
     }
 
@@ -365,15 +363,11 @@ final class BrowserViewModel {
 
         updateChatContextIfNeeded(for: webVM)
 
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
-            isChatPaneVisible = true
-        }
+        isChatPaneVisible = true
     }
 
     func closeChatPane() {
-        withAnimation(.spring(response: 0.26, dampingFraction: 0.86)) {
-            isChatPaneVisible = false
-        }
+        isChatPaneVisible = false
     }
 
     func clearChatForCurrentPage() {

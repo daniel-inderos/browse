@@ -131,9 +131,13 @@ struct BrowserWindow: View {
     @State private var sidebarResizeStartWidth: CGFloat?
     @State private var navigationKeyEventMonitor: Any?
     @State private var isIntentBarTextFocused = false
+    @State private var pageContentOpacity: Double = 1
+    @State private var pageFadeSequence = 0
     private let configuration: BrowserWindowConfiguration
     private let intentBarHeight: CGFloat = 42
     private let intentBarRevealHoverHeight: CGFloat = 120
+    private let sidebarFadeAnimation: Animation = .easeOut(duration: 0.22)
+    private let pageFadeAnimation: Animation = .easeOut(duration: 0.18)
 
     init(configuration: BrowserWindowConfiguration) {
         self.configuration = configuration
@@ -155,7 +159,7 @@ struct BrowserWindow: View {
                     .overlay(alignment: .trailing) {
                         sidebarResizeHandle
                     }
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                .transition(.opacity.animation(sidebarFadeAnimation))
             }
 
             // Main content area
@@ -179,6 +183,7 @@ struct BrowserWindow: View {
                         newTabPage
                     }
                 }
+                .opacity(pageContentOpacity)
                 .transition(.opacity)
             }
             .overlay(alignment: .top) {
@@ -212,8 +217,13 @@ struct BrowserWindow: View {
         )
         .background(WindowSessionRestorer())
         .background(Color(nsColor: .windowBackgroundColor))
-        .animation(.easeInOut(duration: 0.18), value: browserVM.isTabBarVisible)
         .animation(.easeOut(duration: 0.18), value: browserVM.shouldShowIntentBar)
+        .onChange(of: browserVM.isTabBarVisible) { _, _ in
+            fadePageContentForSidebarChange()
+        }
+        .onChange(of: browserVM.isChatPaneVisible) { _, _ in
+            fadePageContentForSidebarChange()
+        }
         .onAppear {
             BrowserWindowSessionController.shared.registerOpenWindow(configuration: configuration)
             installNavigationKeyEventMonitor()
@@ -320,10 +330,9 @@ struct BrowserWindow: View {
                                 browserVM.closeChatPane()
                             }
                         )
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .transition(.opacity.animation(sidebarFadeAnimation))
                     }
                 }
-                .animation(.spring(response: 0.26, dampingFraction: 0.86), value: browserVM.isChatPaneVisible)
             } else {
                 newTabPage
             }
@@ -335,6 +344,23 @@ struct BrowserWindow: View {
                 })
             } else {
                 newTabPage
+            }
+        }
+    }
+
+    private func fadePageContentForSidebarChange() {
+        pageFadeSequence += 1
+        let currentSequence = pageFadeSequence
+
+        withAnimation(pageFadeAnimation) {
+            pageContentOpacity = 0.58
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            guard pageFadeSequence == currentSequence else { return }
+
+            withAnimation(pageFadeAnimation) {
+                pageContentOpacity = 1
             }
         }
     }
