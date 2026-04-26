@@ -23,13 +23,11 @@ struct BriefingSectionView: View {
             Markdown(processedContent)
                 .markdownTheme(.browseEditorial)
                 .environment(\.openURL, OpenURLAction { url in
-                    if url.scheme == "cite",
-                       let host = url.host(),
-                       let index = Int(host),
-                       index > 0, index <= sources.count {
-                        onSourceTap(sources[index - 1].url)
+                    if let sourceURL = BriefingCitationResolver.sourceURL(for: url, sources: sources) {
+                        onSourceTap(sourceURL)
                         return .handled
                     }
+                    guard url.scheme != "cite" else { return .handled }
                     onSourceTap(url)
                     return .handled
                 })

@@ -36,6 +36,9 @@ struct BriefingPageView: View {
                 floatingFollowUpBar
             }
         }
+        .environment(\.openURL, OpenURLAction { url in
+            openBriefingURL(url)
+        })
     }
 
     // MARK: - Briefing Content
@@ -156,6 +159,20 @@ struct BriefingPageView: View {
 
     private var shouldShowFloatingFollowUp: Bool {
         viewModel.phase == .complete || !viewModel.conversationHistory.isEmpty
+    }
+
+    private func openBriefingURL(_ url: URL) -> OpenURLAction.Result {
+        if let sourceURL = BriefingCitationResolver.sourceURL(
+            for: url,
+            sources: viewModel.document.sources
+        ) {
+            onSourceTap(sourceURL)
+            return .handled
+        }
+
+        guard url.scheme != "cite" else { return .handled }
+        onSourceTap(url)
+        return .handled
     }
 
     private var floatingFollowUpBar: some View {
