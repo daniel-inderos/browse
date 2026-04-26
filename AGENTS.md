@@ -9,6 +9,14 @@
 - After changes, run the most relevant lint/typecheck/test command if available.
 - If tests fail because of unrelated existing issues, say so clearly and do not hide it.
 
+## Open-source privacy hygiene
+
+- Treat this repository as a public/open-source project.
+- Do not commit personal information, private emails, account IDs, local usernames, machine-specific absolute paths, signing identities, certificates, provisioning profile details, access tokens, API keys, secrets, or private URLs.
+- Prefer generic configuration, environment variables, auto-detection, placeholders, and documented setup steps over hard-coded personal or local values.
+- Before staging or committing, inspect diffs for accidental personal data or secrets.
+- If personal data or a secret is already committed, call it out immediately and rewrite/amend history before pushing when possible.
+
 ## Git rules
 
 - Never run `git add .` or `git add -A` unless I explicitly ask.
