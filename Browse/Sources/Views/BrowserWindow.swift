@@ -67,7 +67,7 @@ private struct WindowAccessor: NSViewRepresentable {
 struct BrowserWindow: View {
     @Environment(BrowserViewModel.self) private var browserVM
     @State private var sidebarResizeStartWidth: CGFloat?
-    private let intentBarHeight: CGFloat = 52
+    private let intentBarHeight: CGFloat = 42
     private let intentBarRevealHoverHeight: CGFloat = 120
 
     var body: some View {
@@ -130,7 +130,7 @@ struct BrowserWindow: View {
         Rectangle()
             // Keep this view hittable so drag is captured reliably.
             .fill(Color.primary.opacity(0.001))
-            .frame(width: 16)
+            .frame(width: 8)
             .contentShape(Rectangle())
             .highPriorityGesture(
                 DragGesture(minimumDistance: 0)

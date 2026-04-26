@@ -22,6 +22,8 @@ struct IntentBarView: View {
                 .font(BrowseFont.intentBar)
                 .textFieldStyle(.plain)
                 .focused($isFocused)
+                .frame(maxWidth: .infinity)
+                .layoutPriority(1)
                 .onSubmit {
                     if let suggestion = selectedSuggestion {
                         applySuggestion(suggestion)
@@ -72,7 +74,8 @@ struct IntentBarView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity)
         .background(intentBarBackground)
         .overlay(intentBarBorder)
         .overlay(alignment: .topLeading) {
@@ -83,12 +86,13 @@ struct IntentBarView: View {
                     onSelect: applySuggestion
                 )
                 .padding(.horizontal, 12)
-                .padding(.top, 54)
+                .padding(.top, 42)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity)
         .zIndex(2)
         .animation(.easeOut(duration: 0.2), value: isFocused)
         .animation(.easeOut(duration: 0.15), value: isHoveringBar)
