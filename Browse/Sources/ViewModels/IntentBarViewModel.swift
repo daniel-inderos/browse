@@ -15,13 +15,28 @@ final class IntentBarViewModel {
     var isExpanded: Bool = false
 
     private let classifier = IntentClassifier()
-    private let autocompleteService: SearchAutocompleteService
+    private let autocompleteService: any SearchAutocompleteProviding
+    private var isPrivateBrowsing: Bool
+    private let isRemoteAutocompleteEnabled: @MainActor () -> Bool
     private var classificationTask: Task<Void, Never>?
     private var autocompleteTask: Task<Void, Never>?
     private var modeOverride: ModeOverride?
 
-    init(autocompleteService: SearchAutocompleteService = SearchAutocompleteService()) {
+    init(
+        autocompleteService: any SearchAutocompleteProviding = SearchAutocompleteService(),
+        isPrivateBrowsing: Bool = false,
+        isRemoteAutocompleteEnabled: @escaping @MainActor () -> Bool = {
+            SearchAutocompleteSettings.remoteGoogleSuggestionsEnabled
+        }
+    ) {
         self.autocompleteService = autocompleteService
+        self.isPrivateBrowsing = isPrivateBrowsing
+        self.isRemoteAutocompleteEnabled = isRemoteAutocompleteEnabled
+    }
+
+    func setPrivateBrowsing(_ isPrivateBrowsing: Bool) {
+        self.isPrivateBrowsing = isPrivateBrowsing
+        scheduleAutocomplete()
     }
 
     func submit() -> IntentClassification {
@@ -77,17 +92,27 @@ final class IntentBarViewModel {
         autocompleteSuggestions = Self.localAutocompleteSuggestions(for: query)
 
         guard case .open = classifier.classify(query) else {
-            autocompleteTask = Task { [weak self, autocompleteService] in
-                try? await Task.sleep(for: .milliseconds(220))
-                guard !Task.isCancelled else { return }
+            guard let remoteQuery = remoteAutocompleteQuery(from: query) else { return }
+            guard canRequestRemoteAutocomplete(for: remoteQuery) else { return }
 
-                let suggestions = (try? await autocompleteService.suggestions(for: query)) ?? []
+            autocompleteTask = Task { [weak self, autocompleteService] in
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                let canRequest = await MainActor.run {
+                    guard let self else { return false }
+                    guard self.remoteAutocompleteQuery(from: self.text) == remoteQuery else { return false }
+                    return self.canRequestRemoteAutocomplete(for: remoteQuery)
+                }
+                guard canRequest else { return }
+
+                let suggestions = (try? await autocompleteService.suggestions(for: remoteQuery, limit: 5)) ?? []
                 await MainActor.run {
                     guard let self else { return }
-                    guard self.autocompleteQuery(from: self.text) == query else { return }
+                    guard self.remoteAutocompleteQuery(from: self.text) == remoteQuery else { return }
+                    guard self.canRequestRemoteAutocomplete(for: remoteQuery) else { return }
                     self.autocompleteSuggestions = Self.mergedAutocompleteSuggestions(
                         suggestions,
-                        fallback: Self.localAutocompleteSuggestions(for: query)
+                        fallback: Self.localAutocompleteSuggestions(for: remoteQuery)
                     )
                 }
             }
@@ -116,6 +141,19 @@ final class IntentBarViewModel {
         guard query.count >= 2 else { return nil }
         guard !query.contains("\n") else { return nil }
         return query
+    }
+
+    private func remoteAutocompleteQuery(from input: String) -> String? {
+        guard let query = autocompleteQuery(from: input) else { return nil }
+        guard query.count >= 4 else { return nil }
+        guard case .search = classifier.classify(query) else { return nil }
+        return query
+    }
+
+    private func canRequestRemoteAutocomplete(for query: String) -> Bool {
+        guard remoteAutocompleteQuery(from: query) != nil else { return false }
+        guard !isPrivateBrowsing else { return false }
+        return isRemoteAutocompleteEnabled()
     }
 
     private static func localAutocompleteSuggestions(for query: String) -> [String] {

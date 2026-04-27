@@ -5,6 +5,7 @@ struct FaviconView: View {
     var size: CGFloat = 16
 
     @Environment(BrowserViewModel.self) private var browserVM
+    private var privacySettings: PrivacySettingsManager { .shared }
     @State private var image: NSImage?
     @State private var didLoad = false
 
@@ -49,16 +50,30 @@ struct FaviconView: View {
         .frame(width: size, height: size)
         .opacity(didLoad ? 1 : 0.6)
         .animation(.easeOut(duration: 0.2), value: didLoad)
-        .task(id: url) {
+        .task(id: loadID) {
             guard let url else { return }
             image = nil
             didLoad = false
             image = await FaviconService.shared.favicon(
                 for: url,
-                isPrivateBrowsing: browserVM.isPrivateBrowsing
+                isPrivateBrowsing: browserVM.isPrivateBrowsing,
+                allowsGoogleS2Fallback: allowsGoogleS2Fallback
             )
             didLoad = image != nil
         }
+    }
+
+    private var allowsGoogleS2Fallback: Bool {
+        !browserVM.isPrivateBrowsing ||
+            privacySettings.allowsGoogleS2FaviconFallbackInPrivateBrowsing
+    }
+
+    private var loadID: String {
+        [
+            url?.absoluteString ?? "",
+            String(browserVM.isPrivateBrowsing),
+            String(allowsGoogleS2Fallback),
+        ].joined(separator: "|")
     }
 
     private func stableHash(_ value: String) -> UInt64 {

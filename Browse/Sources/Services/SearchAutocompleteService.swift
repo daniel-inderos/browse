@@ -1,5 +1,9 @@
 import Foundation
 
+protocol SearchAutocompleteProviding: Sendable {
+    func suggestions(for query: String, limit: Int) async throws -> [String]
+}
+
 final class SearchAutocompleteService: Sendable {
     private let session: URLSession
     private let baseURL: URL
@@ -67,6 +71,8 @@ final class SearchAutocompleteService: Sendable {
         return suggestions
     }
 }
+
+extension SearchAutocompleteService: SearchAutocompleteProviding {}
 
 private struct GoogleAutocompleteResponse: Decodable {
     let suggestions: [String]

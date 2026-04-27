@@ -76,4 +76,122 @@ struct IntentBarViewModelTests {
 
         #expect(viewModel.autocompleteSuggestions.isEmpty)
     }
+
+    @Test("Remote autocomplete is not requested when setting is disabled")
+    func remoteAutocompleteIsNotRequestedWhenSettingIsDisabled() async throws {
+        let service = RecordingAutocompleteService(suggestions: ["swift package manager"])
+        let viewModel = IntentBarViewModel(
+            autocompleteService: service,
+            isRemoteAutocompleteEnabled: { false }
+        )
+        viewModel.text = "swift tutorial"
+
+        try await Task.sleep(for: .milliseconds(450))
+
+        #expect(await service.requestedQueries() == [])
+        #expect(viewModel.autocompleteSuggestions == [
+            "swift tutorial news",
+            "swift tutorial meaning",
+            "swift tutorial tutorial",
+            "swift tutorial examples",
+            "swift tutorial near me"
+        ])
+    }
+
+    @Test("Remote autocomplete is requested for likely search input when enabled")
+    func remoteAutocompleteIsRequestedForLikelySearchInputWhenEnabled() async throws {
+        let service = RecordingAutocompleteService(suggestions: [
+            "swift package manager",
+            "swift concurrency"
+        ])
+        let viewModel = IntentBarViewModel(
+            autocompleteService: service,
+            isRemoteAutocompleteEnabled: { true }
+        )
+        viewModel.text = "swift tutorial"
+
+        try await Task.sleep(for: .milliseconds(450))
+
+        #expect(await service.requestedQueries() == ["swift tutorial"])
+        #expect(Array(viewModel.autocompleteSuggestions.prefix(2)) == [
+            "swift package manager",
+            "swift concurrency"
+        ])
+    }
+
+    @Test("Remote autocomplete skips private windows while local suggestions remain")
+    func remoteAutocompleteSkipsPrivateWindowsWhileLocalSuggestionsRemain() async throws {
+        let service = RecordingAutocompleteService(suggestions: ["swift package manager"])
+        let viewModel = IntentBarViewModel(
+            autocompleteService: service,
+            isPrivateBrowsing: true,
+            isRemoteAutocompleteEnabled: { true }
+        )
+        viewModel.text = "swift tutorial"
+
+        try await Task.sleep(for: .milliseconds(450))
+
+        #expect(await service.requestedQueries() == [])
+        #expect(viewModel.autocompleteSuggestions == [
+            "swift tutorial news",
+            "swift tutorial meaning",
+            "swift tutorial tutorial",
+            "swift tutorial examples",
+            "swift tutorial near me"
+        ])
+    }
+
+    @Test("Remote autocomplete skips briefing-like natural language")
+    func remoteAutocompleteSkipsBriefingLikeNaturalLanguage() async throws {
+        let service = RecordingAutocompleteService(suggestions: ["what is swift"])
+        let viewModel = IntentBarViewModel(
+            autocompleteService: service,
+            isRemoteAutocompleteEnabled: { true }
+        )
+        viewModel.text = "what is swift concurrency?"
+
+        try await Task.sleep(for: .milliseconds(450))
+
+        #expect(await service.requestedQueries() == [])
+        #expect(!viewModel.autocompleteSuggestions.isEmpty)
+    }
+
+    @Test("Remote autocomplete waits for a longer search threshold")
+    func remoteAutocompleteWaitsForLongerSearchThreshold() async throws {
+        let service = RecordingAutocompleteService(suggestions: ["cat videos"])
+        let viewModel = IntentBarViewModel(
+            autocompleteService: service,
+            isRemoteAutocompleteEnabled: { true }
+        )
+        viewModel.text = "cat"
+
+        try await Task.sleep(for: .milliseconds(450))
+
+        #expect(await service.requestedQueries() == [])
+        #expect(viewModel.autocompleteSuggestions == [
+            "cat news",
+            "cat meaning",
+            "cat tutorial",
+            "cat examples",
+            "cat near me"
+        ])
+    }
+}
+
+private actor RecordingAutocompleteService: SearchAutocompleteProviding {
+    private var queries: [String] = []
+    private let autocompleteSuggestions: [String]
+
+    init(suggestions: [String]) {
+        autocompleteSuggestions = suggestions
+    }
+
+    func suggestions(for query: String, limit: Int) async throws -> [String] {
+        queries.append(query)
+        return Array(autocompleteSuggestions.prefix(limit))
+    }
+
+    func requestedQueries() -> [String] {
+        queries
+    }
 }

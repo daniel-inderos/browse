@@ -4,6 +4,7 @@ import SwiftUI
 final class SettingsViewModel {
     var claudeAPIKey: String = ""
     var exaAPIKey: String = ""
+    var remoteGoogleSuggestionsEnabled: Bool = SearchAutocompleteSettings.remoteGoogleSuggestionsEnabled
     var claudeTestStatus: TestStatus = .idle
     var exaTestStatus: TestStatus = .idle
 
@@ -32,6 +33,11 @@ final class SettingsViewModel {
     func setExaAPIKey(_ value: String) {
         exaAPIKey = value
         saveExaKey()
+    }
+
+    func setRemoteGoogleSuggestionsEnabled(_ value: Bool) {
+        remoteGoogleSuggestionsEnabled = value
+        SearchAutocompleteSettings.remoteGoogleSuggestionsEnabled = value
     }
 
     func saveClaudeKey() {

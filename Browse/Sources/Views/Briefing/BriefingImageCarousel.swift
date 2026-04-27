@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BriefingImageCarousel: View {
     let sources: [Source]
+    let allowsRemoteImageLoading: Bool
     let onSourceTap: (URL) -> Void
 
     private var imageSources: [Source] {
@@ -15,7 +16,10 @@ struct BriefingImageCarousel: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(imageSources) { source in
-                        ImageCard(source: source)
+                        ImageCard(
+                            source: source,
+                            allowsRemoteImageLoading: allowsRemoteImageLoading
+                        )
                             .onTapGesture { onSourceTap(source.url) }
                     }
                 }
@@ -54,6 +58,7 @@ struct BriefingImageCarousel: View {
 
 private struct ImageCard: View {
     let source: Source
+    let allowsRemoteImageLoading: Bool
 
     @State private var isHovering = false
 
@@ -63,25 +68,29 @@ private struct ImageCard: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             // Image layer
-            AsyncImage(url: source.imageURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: cardWidth, height: cardHeight)
-                        .clipped()
-                        .transition(.opacity.animation(.easeOut(duration: 0.3)))
+            if allowsRemoteImageLoading {
+                AsyncImage(url: source.imageURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: cardWidth, height: cardHeight)
+                            .clipped()
+                            .transition(.opacity.animation(.easeOut(duration: 0.3)))
 
-                case .failure:
-                    fallbackView
+                    case .failure:
+                        fallbackView
 
-                case .empty:
-                    shimmerPlaceholder
+                    case .empty:
+                        shimmerPlaceholder
 
-                @unknown default:
-                    shimmerPlaceholder
+                    @unknown default:
+                        shimmerPlaceholder
+                    }
                 }
+            } else {
+                fallbackView
             }
 
             // Attribution overlay — gradient + domain

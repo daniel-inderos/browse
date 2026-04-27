@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
     private var accentManager: AccentColorManager { .shared }
+    private var privacySettings: PrivacySettingsManager { .shared }
 
     /// Binding that bridges the macOS `ColorPicker` (which wants `Binding<Color>`)
     /// to the hex-string storage inside `AccentColorManager`.
@@ -42,6 +43,23 @@ struct SettingsView: View {
                     // Show current selection label
                     accentLabel
                 }
+            }
+
+            // ── Search Suggestions ─────────────────────────────
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Search Suggestions")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Local suggestions are always available. Google autocomplete sends likely search text to Google after a short pause and is off in private windows.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle("Use Google autocomplete suggestions", isOn: Binding(
+                    get: { viewModel.remoteGoogleSuggestionsEnabled },
+                    set: { viewModel.setRemoteGoogleSuggestionsEnabled($0) }
+                ))
             }
 
             // ── Claude API ─────────────────────────────────────
@@ -96,6 +114,38 @@ struct SettingsView: View {
                 }
             }
 
+            // ── Private Browsing ───────────────────────────────
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Private Browsing Privacy")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Private windows avoid optional third-party visual lookups unless enabled here.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle(
+                    "Use Google favicon service in private windows",
+                    isOn: Binding(
+                        get: { privacySettings.allowsGoogleS2FaviconFallbackInPrivateBrowsing },
+                        set: { privacySettings.allowsGoogleS2FaviconFallbackInPrivateBrowsing = $0 }
+                    )
+                )
+                .font(.system(size: 12))
+                .help("May send site domains to Google's S2 favicon endpoint to improve favicon coverage.")
+
+                Toggle(
+                    "Load briefing images in private windows",
+                    isOn: Binding(
+                        get: { privacySettings.allowsBriefingImageLoadingInPrivateBrowsing },
+                        set: { privacySettings.allowsBriefingImageLoadingInPrivateBrowsing = $0 }
+                    )
+                )
+                .font(.system(size: 12))
+                .help("Loads source image URLs from their remote hosts while rendering private briefing cards.")
+            }
+
             // ── Links ──────────────────────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 6) {
@@ -105,7 +155,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 480)
+        .frame(width: 520, height: 660)
         .onAppear {
             viewModel.loadAPIKeysIfNeeded()
         }

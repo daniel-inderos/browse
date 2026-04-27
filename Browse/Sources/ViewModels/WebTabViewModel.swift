@@ -336,11 +336,7 @@ final class WebTabViewModel: NSObject {
                     } else {
                         self.updateBackForwardAvailability()
                     }
-                    if let host = self.currentURL?.host {
-                        self.faviconURL = URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=32")
-                    } else {
-                        self.faviconURL = nil
-                    }
+                    self.faviconURL = self.currentURL
                     self.onStateChange?()
                 }
             }

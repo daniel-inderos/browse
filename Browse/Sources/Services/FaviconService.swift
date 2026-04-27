@@ -6,6 +6,11 @@ struct FaviconFetchRequest: Equatable {
     let url: URL
 }
 
+enum FaviconFetchPolicy {
+    case standard
+    case firstPartyOnly
+}
+
 actor FaviconService {
     static let shared = FaviconService()
 
@@ -13,8 +18,15 @@ actor FaviconService {
     private var inFlight: [String: Task<NSImage?, Never>] = [:]
     private let privateSession = URLSession(configuration: .ephemeral)
 
-    func favicon(for url: URL, isPrivateBrowsing: Bool = false) async -> NSImage? {
-        guard let request = Self.fetchRequest(for: url) else { return nil }
+    func favicon(
+        for url: URL,
+        isPrivateBrowsing: Bool = false,
+        allowsGoogleS2Fallback: Bool = true
+    ) async -> NSImage? {
+        let policy: FaviconFetchPolicy = isPrivateBrowsing && !allowsGoogleS2Fallback
+            ? .firstPartyOnly
+            : .standard
+        guard let request = Self.fetchRequest(for: url, policy: policy) else { return nil }
 
         if isPrivateBrowsing {
             return await fetchFavicon(request, session: privateSession)
@@ -42,9 +54,18 @@ actor FaviconService {
         return result
     }
 
-    static func fetchRequest(for url: URL, size: Int = 64) -> FaviconFetchRequest? {
+    static func fetchRequest(
+        for url: URL,
+        size: Int = 64,
+        policy: FaviconFetchPolicy = .standard
+    ) -> FaviconFetchRequest? {
         if let targetHost = googleS2TargetHost(from: url) {
-            return googleS2FetchRequest(for: targetHost, size: size)
+            switch policy {
+            case .standard:
+                return googleS2FetchRequest(for: targetHost, size: size)
+            case .firstPartyOnly:
+                return firstPartyFaviconFetchRequest(for: targetHost)
+            }
         }
 
         if isLikelyDirectFaviconURL(url) {
@@ -55,7 +76,12 @@ actor FaviconService {
         }
 
         guard let host = normalizedHost(from: url) else { return nil }
-        return googleS2FetchRequest(for: host, size: size)
+        switch policy {
+        case .standard:
+            return googleS2FetchRequest(for: host, size: size)
+        case .firstPartyOnly:
+            return firstPartyFaviconFetchRequest(for: url)
+        }
     }
 
     private static func googleS2FetchRequest(for host: String, size: Int) -> FaviconFetchRequest? {
@@ -70,6 +96,28 @@ actor FaviconService {
 
         guard let url = components.url else { return nil }
         return FaviconFetchRequest(cacheKey: host, url: url)
+    }
+
+    private static func firstPartyFaviconFetchRequest(for url: URL) -> FaviconFetchRequest? {
+        guard let host = url.host?.lowercased() else { return nil }
+        let scheme = (url.scheme == "http" || url.scheme == "https") ? url.scheme : "https"
+        return firstPartyFaviconFetchRequest(for: host, scheme: scheme)
+    }
+
+    private static func firstPartyFaviconFetchRequest(
+        for host: String,
+        scheme: String? = "https"
+    ) -> FaviconFetchRequest? {
+        var components = URLComponents()
+        components.scheme = scheme ?? "https"
+        components.host = host
+        components.path = "/favicon.ico"
+
+        guard let url = components.url else { return nil }
+        return FaviconFetchRequest(
+            cacheKey: url.absoluteString.lowercased(),
+            url: url
+        )
     }
 
     private static func googleS2TargetHost(from url: URL) -> String? {

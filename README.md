@@ -103,6 +103,8 @@ The Settings window includes:
 
 - Accent color presets.
 - Custom accent color picker.
+- Search suggestion privacy controls.
+- Private-window visual privacy controls for Google favicon fallback and briefing source images.
 - Claude API key input and connection test.
 - Exa API key input and connection test.
 - Links to the Anthropic Console and Exa dashboard.
@@ -197,7 +199,7 @@ best text editor
 weather radar
 ```
 
-Autocomplete suggestions appear while typing. Browse provides local fallback suggestions immediately and then merges remote Google suggestions when available.
+Autocomplete suggestions appear while typing. Browse provides local suggestions immediately. Google autocomplete suggestions are optional, can be enabled in Settings, are not requested in private windows by default, and are only requested for likely search text after a short pause.
 
 ### Creating Briefings
 
@@ -269,6 +271,8 @@ Private windows use:
 - no browser session persistence
 - no recently closed tab memory
 - an ephemeral favicon session
+- first-party/direct favicon fetching by default, without Google S2 fallback
+- generated briefing image placeholders by default, without preloading source image URLs
 
 API keys still come from the user's Keychain because they are app settings, not browsing history.
 
@@ -442,10 +446,13 @@ Browse treats the repository as suitable for public/open-source development. Run
 | --- | --- |
 | Claude and Exa API keys | macOS Keychain, service `com.browse.app.api-keys.v2` |
 | Accent color | UserDefaults key `accentColorHex` |
+| Google autocomplete preference | UserDefaults key `remoteGoogleSearchAutocompleteEnabled` |
+| Private Google S2 favicon preference | UserDefaults key `privacy.privateGoogleS2FaviconFallbackEnabled` |
+| Private briefing image preference | UserDefaults key `privacy.privateBriefingImageLoadingEnabled` |
 | Normal browser session | JSON under the user's Application Support `Browse` directory |
 | Normal web browsing data | Default WebKit website data store |
 | Private web browsing data | Non-persistent WebKit website data store |
-| Private favicon requests | Ephemeral URLSession |
+| Private favicon requests | Ephemeral URLSession, first-party/direct by default |
 
 ### Persisted Browser State
 
@@ -470,7 +477,9 @@ Page chat snapshots are keyed by normalized URL. URL fragments are ignored, sche
 
 ### Private Browsing Behavior
 
-Private windows do not persist browser state, recently closed tabs, page chats, or WebKit website data. They still use configured API keys from Keychain when the user invokes AI features.
+Private windows do not persist browser state, recently closed tabs, page chats, or WebKit website data. They keep local intent-bar suggestions, but remote Google autocomplete is disabled by default. They still use configured API keys from Keychain when the user invokes AI features.
+
+By default, private windows avoid optional third-party visual lookups. Favicons are fetched directly from likely favicon URLs or from the visited site's `/favicon.ico`; Browse does not send page domains to Google's S2 favicon endpoint unless "Use Google favicon service in private windows" is enabled in Settings. Briefing source image cards render generated placeholders by default in private windows; enabling "Load briefing images in private windows" lets those remote source image URLs load as the briefing page appears.
 
 ### Repository Hygiene
 
@@ -493,8 +502,9 @@ Browse uses the network for both browser content and app services.
 | --- | --- | --- |
 | Web browsing | User-entered URLs through WKWebView | `WebTabViewModel` |
 | Web search | Google Search URL | `BrowserViewModel.openGoogleSearch` |
-| Autocomplete | `https://suggestqueries.google.com/complete/search` | `SearchAutocompleteService` |
-| Favicons | Direct favicon URL or Google S2 favicon service | `FaviconService` |
+| Autocomplete | Optional Google requests to `https://suggestqueries.google.com/complete/search` for likely search text | `SearchAutocompleteService` |
+| Favicons | Direct favicon URL or Google S2 favicon service in normal windows; direct/first-party by default in private windows | `FaviconService` |
+| Briefing source images | Source image URLs returned by Exa, loaded by `AsyncImage` when allowed | `BriefingImageCarousel` |
 | Briefing source search | `https://api.exa.ai/search` | `ExaAPIClient` |
 | AI generation and chat | `https://api.anthropic.com/v1/messages` | `ClaudeAPIClient` |
 
@@ -643,7 +653,7 @@ Browse still shows local fallback suggestions. Remote suggestions require access
 
 ### Favicons Do Not Load
 
-Browse falls back to generated letter icons. Favicon requests use direct favicon URLs when likely, otherwise Google S2 by normalized host.
+Browse falls back to generated letter icons. Normal windows use direct favicon URLs when likely, otherwise Google S2 by normalized host. Private windows use direct or first-party favicon requests by default; enable the private Google favicon setting if you want Google S2 coverage there too.
 
 ### Pages Render Differently Than Safari
 

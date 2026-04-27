@@ -5,6 +5,7 @@ struct BriefingPageView: View {
     @Bindable var viewModel: BriefingViewModel
     let tabID: UUID
     let onSourceTap: (URL) -> Void
+    private var privacySettings: PrivacySettingsManager { .shared }
 
     @State private var shouldFollowStreamingFollowUp = false
     @State private var scrollPosition = ScrollPosition(edge: .top)
@@ -89,6 +90,7 @@ struct BriefingPageView: View {
             if !viewModel.document.sources.isEmpty {
                 BriefingImageCarousel(
                     sources: viewModel.document.sources,
+                    allowsRemoteImageLoading: allowsBriefingImageLoading,
                     onSourceTap: onSourceTap
                 )
                 .padding(.top, 24)
@@ -187,6 +189,11 @@ struct BriefingPageView: View {
 
     private var shouldShowFloatingFollowUp: Bool {
         viewModel.phase == .complete || !viewModel.conversationHistory.isEmpty
+    }
+
+    private var allowsBriefingImageLoading: Bool {
+        !browserVM.isPrivateBrowsing ||
+            privacySettings.allowsBriefingImageLoadingInPrivateBrowsing
     }
 
     private var shouldShowReturnToBottomButton: Bool {
