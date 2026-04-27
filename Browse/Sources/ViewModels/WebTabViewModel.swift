@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import AppKit
 import OSLog
 
 private let webTabLogger = Logger(subsystem: "com.browse.app", category: "WebTab")
@@ -20,6 +21,114 @@ private final class ScrollMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
+private final class ContextLinkMessageHandler: NSObject, WKScriptMessageHandler {
+    var onContextLinkChange: (@Sendable (URL?) -> Void)?
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard let href = message.body as? String,
+              let url = URL(string: href) else {
+            onContextLinkChange?(nil)
+            return
+        }
+
+        onContextLinkChange?(url)
+    }
+}
+
+private final class NewTabLinkMessageHandler: NSObject, WKScriptMessageHandler {
+    var onOpenLinkInNewTab: (@Sendable (URL) -> Void)?
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard let href = message.body as? String,
+              let url = URL(string: href) else { return }
+
+        onOpenLinkInNewTab?(url)
+    }
+}
+
+private final class BrowserWebView: WKWebView {
+    var contextMenuLinkURL: URL?
+    var onOpenContextLinkInNewTab: ((URL) -> Void)?
+    private var isObservingLinkMenus = false
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    func observeLinkMenus() {
+        guard !isObservingLinkMenus else { return }
+        isObservingLinkMenus = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(menuDidBeginTracking(_:)),
+            name: NSMenu.didBeginTrackingNotification,
+            object: nil
+        )
+    }
+
+    @objc private func menuDidBeginTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu else { return }
+        addOpenLinkInNewTabItemIfNeeded(to: menu)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        guard let contextMenuLinkURL else { return menu }
+
+        let resolvedMenu = menu ?? NSMenu()
+        addOpenLinkInNewTabItemIfNeeded(to: resolvedMenu, url: contextMenuLinkURL)
+
+        return resolvedMenu
+    }
+
+    private func addOpenLinkInNewTabItemIfNeeded(to menu: NSMenu, url: URL? = nil) {
+        guard let url = url ?? contextMenuLinkURL else { return }
+        guard isLinkMenu(menu) else { return }
+
+        if let existingItem = menu.items.first(where: { $0.title == "Open Link in New Tab" }) {
+            existingItem.target = self
+            existingItem.action = #selector(openContextLinkInNewTab(_:))
+            existingItem.representedObject = url
+            return
+        }
+
+        let item = NSMenuItem(
+            title: "Open Link in New Tab",
+            action: #selector(openContextLinkInNewTab(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = url
+
+        if let windowIndex = menu.items.firstIndex(where: { $0.title == "Open Link in New Window" }) {
+            menu.insertItem(item, at: windowIndex)
+        } else if menu.items.isEmpty {
+            menu.addItem(item)
+        } else {
+            menu.insertItem(item, at: 0)
+        }
+    }
+
+    private func isLinkMenu(_ menu: NSMenu) -> Bool {
+        let titles = Set(menu.items.map(\.title))
+        return titles.contains("Copy Link") ||
+            titles.contains("Open Link") ||
+            titles.contains("Open Link in New Window") ||
+            titles.contains("Download Linked File")
+    }
+
+    @objc private func openContextLinkInNewTab(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        onOpenContextLinkInNewTab?(url)
+    }
+}
+
 // MARK: - WebTabViewModel
 
 @MainActor
@@ -34,6 +143,7 @@ final class WebTabViewModel: NSObject {
     var faviconURL: URL?
     var onStateChange: (() -> Void)?
     var onScrollPositionChange: ((CGFloat) -> Void)?
+    var onOpenURLInNewTab: ((URL, Bool) -> Void)?
     var navigationHistorySnapshot: [URL] { navigationHistory }
     var navigationHistorySnapshotIndex: Int? { navigationHistoryIndex }
 
@@ -47,6 +157,8 @@ final class WebTabViewModel: NSObject {
 
     /// Prevent the handler from being collected while the content controller retains it.
     private var scrollHandler: ScrollMessageHandler?
+    private var contextLinkHandler: ContextLinkMessageHandler?
+    private var newTabLinkHandler: NewTabLinkMessageHandler?
 
     init(websiteDataStore: WKWebsiteDataStore = .default()) {
         let config = WKWebViewConfiguration()
@@ -66,8 +178,20 @@ final class WebTabViewModel: NSObject {
             forMainFrameOnly: true
         )
         config.userContentController.addUserScript(scrollScript)
+        let contextLinkScript = WKUserScript(
+            source: Self.contextLinkObserverJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: false
+        )
+        config.userContentController.addUserScript(contextLinkScript)
+        let newTabLinkScript = WKUserScript(
+            source: Self.newTabLinkObserverJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: false
+        )
+        config.userContentController.addUserScript(newTabLinkScript)
 
-        self.webView = WKWebView(frame: .zero, configuration: config)
+        self.webView = BrowserWebView(frame: .zero, configuration: config)
         super.init()
 
         // Wire up the message handler *after* super.init so we can
@@ -81,7 +205,30 @@ final class WebTabViewModel: NSObject {
         self.scrollHandler = handler
         webView.configuration.userContentController.add(handler, name: "scrollObserver")
 
+        let contextLinkHandler = ContextLinkMessageHandler()
+        contextLinkHandler.onContextLinkChange = { [weak self] url in
+            Task { @MainActor [weak self] in
+                (self?.webView as? BrowserWebView)?.contextMenuLinkURL = url
+            }
+        }
+        self.contextLinkHandler = contextLinkHandler
+        webView.configuration.userContentController.add(contextLinkHandler, name: "contextLinkObserver")
+        (webView as? BrowserWebView)?.onOpenContextLinkInNewTab = { [weak self] url in
+            self?.openInNewTab(url, activates: false)
+        }
+        (webView as? BrowserWebView)?.observeLinkMenus()
+
+        let newTabLinkHandler = NewTabLinkMessageHandler()
+        newTabLinkHandler.onOpenLinkInNewTab = { [weak self] url in
+            Task { @MainActor [weak self] in
+                self?.openInNewTab(url, activates: false)
+            }
+        }
+        self.newTabLinkHandler = newTabLinkHandler
+        webView.configuration.userContentController.add(newTabLinkHandler, name: "newTabLinkObserver")
+
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.customUserAgent = Self.desktopSafariUserAgent
         setUpWebViewObservers()
@@ -138,6 +285,85 @@ final class WebTabViewModel: NSObject {
         setInterval(function() { report(document.scrollingElement || document.documentElement); }, 250);
 
         report(document.scrollingElement || document.documentElement);
+    })();
+    """
+
+    private static let contextLinkObserverJS = """
+    (function() {
+        var lastHref = undefined;
+
+        function linkURL(fromTarget) {
+            var node = fromTarget;
+            while (node && node !== document) {
+                if (node.tagName && node.tagName.toLowerCase() === 'a' && node.href) {
+                    return node.href;
+                }
+                node = node.parentNode;
+            }
+            return null;
+        }
+
+        function report(href) {
+            if (href === lastHref) { return; }
+            lastHref = href;
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.contextLinkObserver) {
+                window.webkit.messageHandlers.contextLinkObserver.postMessage(href || '');
+            }
+        }
+
+        document.addEventListener('mousemove', function(event) {
+            report(linkURL(event.target));
+        }, true);
+
+        document.addEventListener('mousedown', function(event) {
+            if (event.button === 2) {
+                report(linkURL(event.target));
+            }
+        }, true);
+
+        document.addEventListener('contextmenu', function(event) {
+            report(linkURL(event.target));
+        }, true);
+    })();
+    """
+
+    private static let newTabLinkObserverJS = """
+    (function() {
+        function linkURL(fromTarget) {
+            var node = fromTarget;
+            while (node && node !== document) {
+                if (node.tagName && node.tagName.toLowerCase() === 'a' && node.href) {
+                    return node.href;
+                }
+                node = node.parentNode;
+            }
+            return null;
+        }
+
+        function openInBackgroundTab(event) {
+            var href = linkURL(event.target);
+            if (!href) { return; }
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.stopImmediatePropagation) {
+                event.stopImmediatePropagation();
+            }
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.newTabLinkObserver) {
+                window.webkit.messageHandlers.newTabLinkObserver.postMessage(href);
+            }
+        }
+
+        document.addEventListener('mousedown', function(event) {
+            if (event.button === 1 && linkURL(event.target)) {
+                event.preventDefault();
+            }
+        }, true);
+
+        document.addEventListener('auxclick', function(event) {
+            if (event.button === 1) {
+                openInBackgroundTab(event);
+            }
+        }, true);
     })();
     """
 
@@ -238,6 +464,10 @@ final class WebTabViewModel: NSObject {
             return "url-\(urlError.errorCode)"
         }
         return "unknown"
+    }
+
+    private func openInNewTab(_ url: URL, activates: Bool = true) {
+        onOpenURLInNewTab?(url, activates)
     }
 
     // MARK: - Navigation history
@@ -424,7 +654,35 @@ extension WebTabViewModel: WKNavigationDelegate {
         }
     }
 
-    nonisolated func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        .allow
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        guard let url = navigationAction.request.url else { return .allow }
+
+        let isLinkActivation = navigationAction.navigationType == .linkActivated
+        let opensNewWindow = navigationAction.targetFrame == nil
+        let isCommandClick = isLinkActivation && navigationAction.modifierFlags.contains(.command)
+        let isMiddleClick = isLinkActivation && navigationAction.buttonNumber == 2
+
+        guard opensNewWindow || isCommandClick || isMiddleClick else { return .allow }
+
+        openInNewTab(url, activates: !(isCommandClick || isMiddleClick))
+        return .cancel
+    }
+}
+
+extension WebTabViewModel: WKUIDelegate {
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        if let url = navigationAction.request.url {
+            let isBackgroundOpen =
+                navigationAction.modifierFlags.contains(.command) ||
+                navigationAction.buttonNumber == 2
+            openInNewTab(url, activates: !isBackgroundOpen)
+        }
+
+        return nil
     }
 }

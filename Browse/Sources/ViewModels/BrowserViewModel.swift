@@ -760,14 +760,18 @@ final class BrowserViewModel {
 
     // MARK: - Source Navigation
 
-    func openSourceInNewTab(_ url: URL) {
+    func openSourceInNewTab(_ url: URL, activates: Bool = true) {
         let tab = makeWebTab(title: url.host ?? "Loading...", url: url, groupID: activeTab?.groupID)
         withAnimation(tabAnimation) {
             tabs.append(tab)
-            activeTabID = tab.id
+            if activates {
+                activeTabID = tab.id
+            }
         }
         tab.lastAccessedAt = Date()
-        isIntentBarVisible = true
+        if activates {
+            isIntentBarVisible = true
+        }
         tab.webTabViewModel?.navigate(to: url)
         persistState()
     }
@@ -1056,6 +1060,9 @@ final class BrowserViewModel {
     }
 
     private func wireWebTabState(for tab: Tab, webVM: WebTabViewModel) {
+        webVM.onOpenURLInNewTab = { [weak self] url, activates in
+            self?.openSourceInNewTab(url, activates: activates)
+        }
         webVM.onStateChange = { [weak self, weak tab, weak webVM] in
             guard let self, let tab, let webVM else { return }
             self.syncWebTabState(tab, from: webVM)
