@@ -7,7 +7,7 @@ import Testing
 struct BrowserViewModelTests {
     @Test("Command number selection follows visible tab sections")
     func commandNumberSelectionFollowsVisibleTabSections() {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let earlierDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
 
         let today = Tab(kind: .web, title: "Today")
@@ -33,7 +33,7 @@ struct BrowserViewModelTests {
 
     @Test("Command number selection includes tab groups before ungrouped tabs")
     func commandNumberSelectionIncludesTabGroupsBeforeUngroupedTabs() {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let group = TabGroup(title: "Work")
         let earlierDate = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
 
@@ -61,7 +61,7 @@ struct BrowserViewModelTests {
 
     @Test("Deleting a tab group keeps tabs open and clears membership")
     func deletingTabGroupKeepsTabsOpenAndClearsMembership() throws {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let tab = try #require(viewModel.activeTab)
 
         let groupID = viewModel.createTabGroup(title: "Read Later", containing: tab.id)
@@ -77,7 +77,7 @@ struct BrowserViewModelTests {
 
     @Test("Closing the last tab in a group deletes the group")
     func closingLastTabInGroupDeletesGroup() throws {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let firstTab = try #require(viewModel.activeTab)
         let groupID = viewModel.createTabGroup(title: "Research", containing: firstTab.id)
 
@@ -94,7 +94,7 @@ struct BrowserViewModelTests {
 
     @Test("Moving a tab into a collapsed group expands it")
     func movingTabIntoCollapsedGroupExpandsIt() throws {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let tab = try #require(viewModel.activeTab)
         let groupID = viewModel.createTabGroup(title: "Research")
 
@@ -109,7 +109,7 @@ struct BrowserViewModelTests {
 
     @Test("Active tab URL uses live page URL before stored URL")
     func activeTabURLUsesLivePageURLBeforeStoredURL() throws {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let tab = try #require(viewModel.activeTab)
         let webVM = try #require(tab.webTabViewModel)
 
@@ -122,7 +122,7 @@ struct BrowserViewModelTests {
 
     @Test("Copy URL indicator becomes visible")
     func copyURLIndicatorBecomesVisible() {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
 
         #expect(!viewModel.isCurrentURLCopyIndicatorVisible)
         viewModel.showCurrentURLCopiedIndicator()
@@ -131,7 +131,7 @@ struct BrowserViewModelTests {
 
     @Test("Page chat sidebar visibility follows the active page")
     func pageChatSidebarVisibilityFollowsActivePage() throws {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let firstTab = try #require(viewModel.activeTab)
         let firstWebVM = try #require(firstTab.webTabViewModel)
         firstWebVM.currentURL = URL(string: "https://example.com/first")
@@ -179,7 +179,7 @@ struct BrowserViewModelTests {
 
     @Test("Reopening a closed web tab creates a fresh web view")
     func reopeningClosedWebTabCreatesFreshWebView() throws {
-        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let viewModel = makeViewModel()
         let tab = try #require(viewModel.activeTab)
         let originalWebVM = try #require(tab.webTabViewModel)
         let previousURL = try #require(URL(string: "https://example.com/previous"))
@@ -201,5 +201,14 @@ struct BrowserViewModelTests {
         #expect(reopenedWebVM !== originalWebVM)
         #expect(reopenedWebVM.navigationHistorySnapshot == [previousURL, url])
         #expect(reopenedWebVM.navigationHistorySnapshotIndex == 1)
+    }
+
+    private func makeViewModel() -> BrowserViewModel {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        return BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: BrowserPersistenceStore(directoryURL: directory)
+        )
     }
 }

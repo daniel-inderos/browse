@@ -47,7 +47,7 @@ final class BrowserViewModel {
 
     private let windowID: UUID
     private let apiKeyStore = APIKeyStore()
-    private let persistenceStore = BrowserPersistenceStore()
+    private let persistenceStore: BrowserPersistenceStore
     private let allowsStatePersistence: Bool
     private let websiteDataStore: WKWebsiteDataStore
     private let tabAnimation: Animation = .spring(response: 0.26, dampingFraction: 0.86)
@@ -137,10 +137,12 @@ final class BrowserViewModel {
     init(
         windowID: UUID = UUID(),
         isPrivateBrowsing: Bool = false,
-        restoresPersistedState: Bool = true
+        restoresPersistedState: Bool = true,
+        persistenceStore: BrowserPersistenceStore = BrowserPersistenceStore()
     ) {
         self.windowID = windowID
         self.isPrivateBrowsing = isPrivateBrowsing
+        self.persistenceStore = persistenceStore
         self.allowsStatePersistence = !isPrivateBrowsing
         self.websiteDataStore = isPrivateBrowsing ? .nonPersistent() : .default()
 
