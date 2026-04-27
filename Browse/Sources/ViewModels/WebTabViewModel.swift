@@ -208,6 +208,20 @@ final class WebTabViewModel: NSObject {
         updateBackForwardAvailability()
     }
 
+    func clearNavigationHistoryKeepingCurrentPage() {
+        if let currentURL {
+            navigationHistory = [currentURL]
+            navigationHistoryIndex = 0
+        } else {
+            navigationHistory = []
+            navigationHistoryIndex = nil
+        }
+        pendingHistoryLoadIndex = nil
+        usesRestoredNavigationHistoryFallback = false
+        updateBackForwardAvailability()
+        onStateChange?()
+    }
+
     // MARK: - Scroll handling
 
     private func handleScrollMessage(_ offsetY: CGFloat) {

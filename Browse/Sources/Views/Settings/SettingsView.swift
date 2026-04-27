@@ -2,8 +2,11 @@ import SwiftUI
 
 struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
+    @State private var confirmClearBrowsingData = false
+    @State private var confirmClearAIHistory = false
     private var accentManager: AccentColorManager { .shared }
     private var privacySettings: PrivacySettingsManager { .shared }
+    private var retentionSettings: DataRetentionSettingsManager { .shared }
 
     /// Binding that bridges the macOS `ColorPicker` (which wants `Binding<Color>`)
     /// to the hex-string storage inside `AccentColorManager`.
@@ -146,6 +149,60 @@ struct SettingsView: View {
                 .help("Loads source image URLs from their remote hosts while rendering private briefing cards.")
             }
 
+            // ── Data Controls ──────────────────────────────────
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Data")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Control local browsing data, AI conversations, and automatic retention.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Picker("Keep browsing data", selection: Binding(
+                    get: { retentionSettings.browsingDataRetention },
+                    set: {
+                        retentionSettings.browsingDataRetention = $0
+                        try? BrowserPersistenceStore().applyRetention()
+                    }
+                )) {
+                    ForEach(DataRetentionPeriod.allCases) { period in
+                        Text(period.title).tag(period)
+                    }
+                }
+
+                Picker("Keep AI history", selection: Binding(
+                    get: { retentionSettings.aiHistoryRetention },
+                    set: {
+                        retentionSettings.aiHistoryRetention = $0
+                        try? BrowserPersistenceStore().applyRetention()
+                    }
+                )) {
+                    ForEach(DataRetentionPeriod.allCases) { period in
+                        Text(period.title).tag(period)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Button("Clear Browsing Data", role: .destructive) {
+                        confirmClearBrowsingData = true
+                    }
+                    .disabled(viewModel.clearBrowsingDataStatus == .running)
+
+                    actionStatusIndicator(viewModel.clearBrowsingDataStatus)
+                }
+
+                HStack(spacing: 8) {
+                    Button("Clear AI History", role: .destructive) {
+                        confirmClearAIHistory = true
+                    }
+                    .disabled(viewModel.clearAIHistoryStatus == .running)
+
+                    actionStatusIndicator(viewModel.clearAIHistoryStatus)
+                }
+            }
+
             // ── Links ──────────────────────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 6) {
@@ -155,9 +212,25 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 660)
+        .frame(width: 520, height: 780)
         .onAppear {
             viewModel.loadAPIKeysIfNeeded()
+        }
+        .alert("Clear Browsing Data?", isPresented: $confirmClearBrowsingData) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear Browsing Data", role: .destructive) {
+                Task { await viewModel.clearBrowsingData() }
+            }
+        } message: {
+            Text("This clears saved normal-window session data, navigation history snapshots, recently closed tabs, and WebKit website data such as cookies and cache.")
+        }
+        .alert("Clear AI History?", isPresented: $confirmClearAIHistory) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear AI History", role: .destructive) {
+                viewModel.clearAIHistory()
+            }
+        } message: {
+            Text("This clears saved page chats and briefing follow-up conversations. API keys are not removed.")
         }
     }
 
@@ -264,6 +337,34 @@ struct SettingsView: View {
         .onTapGesture {
             if let url = URL(string: url) {
                 NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionStatusIndicator(_ status: SettingsViewModel.ActionStatus) -> some View {
+        switch status {
+        case .idle:
+            EmptyView()
+        case .running:
+            ProgressView()
+                .controlSize(.small)
+        case .success(let message):
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(BrowseColor.success)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .failure(let message):
+            HStack(spacing: 4) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(BrowseColor.destructive)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
     }

@@ -69,7 +69,78 @@ struct BrowserPersistenceStoreTests {
         #expect(store.loadWindowState(forWindowID: closedWindowID) == nil)
     }
 
-    private func makeState(tabTitle: String, url: URL?) -> PersistedBrowserState {
+    @Test("clears AI history while preserving tabs")
+    func clearsAIHistoryWhilePreservingTabs() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        store.save(makeStateWithAIHistory(), forWindowID: windowID)
+
+        try store.clearAIHistory()
+
+        let state = try #require(store.loadWindowState(forWindowID: windowID))
+        #expect(state.tabs.count == 2)
+        #expect(state.pageChats == nil)
+        #expect(state.tabs.first { $0.kind == .briefing }?.briefing?.conversationHistory.isEmpty == true)
+    }
+
+    @Test("clears persisted browsing data files")
+    func clearsPersistedBrowsingDataFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        store.save(makeState(tabTitle: "Window", url: URL(string: "https://example.com")), forWindowID: windowID)
+
+        try store.clearBrowsingData()
+
+        #expect(store.loadWindowState(forWindowID: windowID) == nil)
+        #expect(store.loadRestorableWindowIDs().isEmpty)
+    }
+
+    @Test("prunes browsing data older than cutoff")
+    func prunesBrowsingDataOlderThanCutoff() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let oldWindowID = UUID()
+        let recentWindowID = UUID()
+        let oldDate = Date(timeIntervalSince1970: 100)
+        let recentDate = Date(timeIntervalSince1970: 1_000)
+
+        store.save(
+            makeState(tabTitle: "Old", url: URL(string: "https://example.com/old"), lastAccessedAt: oldDate),
+            forWindowID: oldWindowID
+        )
+        store.save(
+            makeState(tabTitle: "Recent", url: URL(string: "https://example.com/recent"), lastAccessedAt: recentDate),
+            forWindowID: recentWindowID
+        )
+
+        try store.pruneBrowsingData(olderThan: Date(timeIntervalSince1970: 500))
+
+        #expect(store.loadWindowState(forWindowID: oldWindowID) == nil)
+        #expect(store.loadWindowState(forWindowID: recentWindowID)?.tabs.first?.title == "Recent")
+    }
+
+    private func makeState(
+        tabTitle: String,
+        url: URL?,
+        lastAccessedAt: Date = Date()
+    ) -> PersistedBrowserState {
         PersistedBrowserState(
             tabs: [
                 PersistedTabSnapshot(
@@ -82,7 +153,7 @@ struct BrowserPersistenceStoreTests {
                     isFavorite: false,
                     isPinned: false,
                     createdAt: Date(),
-                    lastAccessedAt: Date(),
+                    lastAccessedAt: lastAccessedAt,
                     briefing: nil
                 )
             ],
@@ -94,6 +165,62 @@ struct BrowserPersistenceStoreTests {
             chatPaneOffsetX: nil,
             chatPaneOffsetY: nil,
             pageChats: nil
+        )
+    }
+
+    private func makeStateWithAIHistory() -> PersistedBrowserState {
+        PersistedBrowserState(
+            tabs: [
+                PersistedTabSnapshot(
+                    id: UUID(),
+                    kind: .web,
+                    title: "Example",
+                    url: URL(string: "https://example.com"),
+                    navigationHistory: [URL(string: "https://example.com")!],
+                    navigationHistoryIndex: 0,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(),
+                    lastAccessedAt: Date(),
+                    briefing: nil
+                ),
+                PersistedTabSnapshot(
+                    id: UUID(),
+                    kind: .briefing,
+                    title: "Briefing",
+                    url: nil,
+                    navigationHistory: nil,
+                    navigationHistoryIndex: nil,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(),
+                    lastAccessedAt: Date(),
+                    briefing: PersistedBriefingSnapshot(
+                        document: BriefingDocument(query: "Briefing"),
+                        phase: .complete,
+                        conversationHistory: [
+                            ConversationMessage(role: .user, content: "Question")
+                        ]
+                    )
+                )
+            ],
+            activeTabID: nil,
+            isTabBarVisible: true,
+            tabBarWidth: 220,
+            chatPaneWidth: nil,
+            chatPaneHeight: nil,
+            chatPaneOffsetX: nil,
+            chatPaneOffsetY: nil,
+            pageChats: [
+                PersistedPageChatSnapshot(
+                    pageURL: URL(string: "https://example.com")!,
+                    pageTitle: "Example",
+                    conversationHistory: [
+                        ConversationMessage(role: .user, content: "Question")
+                    ],
+                    updatedAt: Date()
+                )
+            ]
         )
     }
 }

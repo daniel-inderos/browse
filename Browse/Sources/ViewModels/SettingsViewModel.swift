@@ -1,12 +1,16 @@
 import SwiftUI
+import WebKit
 
 @Observable
+@MainActor
 final class SettingsViewModel {
     var claudeAPIKey: String = ""
     var exaAPIKey: String = ""
     var remoteGoogleSuggestionsEnabled: Bool = SearchAutocompleteSettings.remoteGoogleSuggestionsEnabled
     var claudeTestStatus: TestStatus = .idle
     var exaTestStatus: TestStatus = .idle
+    var clearBrowsingDataStatus: ActionStatus = .idle
+    var clearAIHistoryStatus: ActionStatus = .idle
 
     enum TestStatus: Equatable {
         case idle
@@ -15,7 +19,15 @@ final class SettingsViewModel {
         case failure(String)
     }
 
+    enum ActionStatus: Equatable {
+        case idle
+        case running
+        case success(String)
+        case failure(String)
+    }
+
     private let apiKeyStore = APIKeyStore()
+    private let persistenceStore = BrowserPersistenceStore()
     private var hasLoadedAPIKeys = false
 
     func loadAPIKeysIfNeeded() {
@@ -40,6 +52,31 @@ final class SettingsViewModel {
         SearchAutocompleteSettings.remoteGoogleSuggestionsEnabled = value
     }
 
+    @MainActor
+    func clearBrowsingData() async {
+        clearBrowsingDataStatus = .running
+        do {
+            try persistenceStore.clearBrowsingData()
+            await clearDefaultWebsiteData()
+            NotificationCenter.default.post(name: .browseClearBrowsingDataRequested, object: nil)
+            clearBrowsingDataStatus = .success("Browsing data cleared")
+        } catch {
+            clearBrowsingDataStatus = .failure(error.localizedDescription)
+        }
+    }
+
+    @MainActor
+    func clearAIHistory() {
+        clearAIHistoryStatus = .running
+        do {
+            try persistenceStore.clearAIHistory()
+            NotificationCenter.default.post(name: .browseClearAIHistoryRequested, object: nil)
+            clearAIHistoryStatus = .success("AI history cleared")
+        } catch {
+            clearAIHistoryStatus = .failure(error.localizedDescription)
+        }
+    }
+
     func saveClaudeKey() {
         guard !claudeAPIKey.isEmpty else { return }
         try? apiKeyStore.save(claudeAPIKey, for: .claudeAPIKey)
@@ -48,6 +85,19 @@ final class SettingsViewModel {
     func saveExaKey() {
         guard !exaAPIKey.isEmpty else { return }
         try? apiKeyStore.save(exaAPIKey, for: .exaAPIKey)
+    }
+
+    private func clearDefaultWebsiteData() async {
+        let store = WKWebsiteDataStore.default()
+        let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+        await withCheckedContinuation { continuation in
+            store.removeData(
+                ofTypes: dataTypes,
+                modifiedSince: .distantPast
+            ) {
+                continuation.resume()
+            }
+        }
     }
 
     @MainActor

@@ -4,6 +4,16 @@ import WebKit
 @MainActor
 @Observable
 final class BrowserViewModel {
+    private final class NotificationObserverBag {
+        var observers: [NSObjectProtocol] = []
+
+        deinit {
+            for observer in observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+    }
+
     private struct RecentlyClosedTab {
         let tab: Tab
         let index: Int
@@ -40,6 +50,7 @@ final class BrowserViewModel {
     private var intentBarRevealHoverGraceDeadline: Date = .distantPast
     private var recentlyClosedTabs: [RecentlyClosedTab] = []
     private var pageChatSnapshotsByKey: [String: PersistedPageChatSnapshot] = [:]
+    @ObservationIgnored private let settingsObserverBag = NotificationObserverBag()
     private let maxRecentlyClosedTabs = 20
     private let maxPersistedPageChats = 120
 
@@ -91,6 +102,8 @@ final class BrowserViewModel {
         self.isPrivateBrowsing = isPrivateBrowsing
         self.allowsStatePersistence = !isPrivateBrowsing
         self.websiteDataStore = isPrivateBrowsing ? .nonPersistent() : .default()
+
+        observeSettingsDataActions()
 
         if !restoresPersistedState || !restorePersistedState() {
             newTab()
@@ -388,6 +401,36 @@ final class BrowserViewModel {
     func clearChatForCurrentPage() {
         guard let chatViewModel, !chatViewModel.isStreaming else { return }
         chatViewModel.clearConversation()
+    }
+
+    private func clearBrowsingDataFromSettings() {
+        guard !isPrivateBrowsing else { return }
+
+        recentlyClosedTabs = []
+        for tab in tabs where tab.kind == .web {
+            tab.webTabViewModel?.clearNavigationHistoryKeepingCurrentPage()
+        }
+        persistState()
+    }
+
+    private func clearAIHistoryFromSettings() {
+        guard !isPrivateBrowsing else { return }
+
+        pageChatSnapshotsByKey = [:]
+        chatViewModel?.clearConversation()
+        for tab in tabs where tab.kind == .briefing {
+            tab.briefingViewModel?.conversationHistory = []
+        }
+        persistState()
+    }
+
+    private func applyRetentionFromSettings() {
+        guard !isPrivateBrowsing else { return }
+        do {
+            try persistenceStore.applyRetention()
+        } catch {
+            // Retention failures should not interrupt active browsing.
+        }
     }
 
     func attachTabMentionToChat(_ candidate: ChatTabMentionCandidate) async {
@@ -731,6 +774,39 @@ final class BrowserViewModel {
     private func persistState() {
         guard allowsStatePersistence else { return }
         persistenceStore.save(makePersistedState(), forWindowID: windowID)
+    }
+
+    private func observeSettingsDataActions() {
+        let center = NotificationCenter.default
+        settingsObserverBag.observers = [
+            center.addObserver(
+                forName: .browseClearBrowsingDataRequested,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.clearBrowsingDataFromSettings()
+                }
+            },
+            center.addObserver(
+                forName: .browseClearAIHistoryRequested,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.clearAIHistoryFromSettings()
+                }
+            },
+            center.addObserver(
+                forName: .browseDataRetentionSettingsChanged,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.applyRetentionFromSettings()
+                }
+            }
+        ]
     }
 
     private func restoredNavigationHistory(from snapshot: PersistedTabSnapshot) -> [URL] {

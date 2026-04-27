@@ -450,6 +450,8 @@ Browse treats the repository as suitable for public/open-source development. Run
 | Google autocomplete preference | UserDefaults key `remoteGoogleSearchAutocompleteEnabled` |
 | Private Google S2 favicon preference | UserDefaults key `privacy.privateGoogleS2FaviconFallbackEnabled` |
 | Private briefing image preference | UserDefaults key `privacy.privateBriefingImageLoadingEnabled` |
+| Browsing data retention preference | UserDefaults key `retention.browsingData` |
+| AI history retention preference | UserDefaults key `retention.aiHistory` |
 | Normal browser session | JSON under the user's Application Support `Browse` directory |
 | Normal web browsing data | Default WebKit website data store |
 | Private web browsing data | Non-persistent WebKit website data store |
@@ -475,6 +477,8 @@ Normal windows persist:
 Blank new-tab-only windows are not restorable. Closed normal windows are removed from the restore list unless the app is terminating. On termination, Browse prunes stored windows to the currently open normal windows.
 
 Page chat snapshots are keyed by normalized URL. URL fragments are ignored, schemes and hosts are lowercased, and default ports are removed. Browse keeps up to 120 persisted page chat snapshots.
+
+Settings includes controls to clear normal browsing data, clear AI history, and choose retention windows for each. Clearing browsing data removes saved normal-window session data and WebKit website data such as cookies and cache. Clearing AI history removes saved page chats and briefing follow-up conversations without deleting API keys.
 
 ### Private Browsing Behavior
 

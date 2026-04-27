@@ -209,15 +209,69 @@ struct BrowserPersistenceStore {
 
     func save(_ state: PersistedBrowserState) {
         do {
-            try ensureDirectoryExists()
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(state)
-            try data.write(to: fileURL, options: .atomic)
+            try write(state, to: fileURL)
         } catch {
             // Persistence errors should never crash the app.
             persistenceLogger.error("Failed to save state; category=\(Self.errorCategory(error), privacy: .public)")
+        }
+    }
+
+    func clearBrowsingData() throws {
+        try removeFileIfPresent(fileURL)
+        try removeFileIfPresent(sessionFileURL)
+    }
+
+    func clearAIHistory() throws {
+        if let session = loadSession() {
+            try saveSession(session.clearingAIHistory())
+        }
+        if let state = load() {
+            try write(state.clearingAIHistory(), to: fileURL)
+        }
+    }
+
+    func applyRetention(_ settings: DataRetentionSettingsManager = .shared, now: Date = Date()) throws {
+        if let cutoff = settings.browsingDataRetention.cutoffDate(relativeTo: now) {
+            try pruneBrowsingData(olderThan: cutoff)
+        }
+        if let cutoff = settings.aiHistoryRetention.cutoffDate(relativeTo: now) {
+            try pruneAIHistory(olderThan: cutoff)
+        }
+    }
+
+    func pruneBrowsingData(olderThan cutoff: Date) throws {
+        if let session = loadSession() {
+            let windows = session.windows.compactMap { snapshot -> PersistedBrowserWindowSnapshot? in
+                let state = snapshot.state.pruningBrowsingData(olderThan: cutoff)
+                guard state.isRestorableWindowState else { return nil }
+                return PersistedBrowserWindowSnapshot(
+                    id: snapshot.id,
+                    state: state,
+                    lastUpdatedAt: snapshot.lastUpdatedAt
+                )
+            }
+            try saveSession(PersistedBrowserWindowSession(windows: windows))
+        }
+
+        if let state = load() {
+            try write(state.pruningBrowsingData(olderThan: cutoff), to: fileURL)
+        }
+    }
+
+    func pruneAIHistory(olderThan cutoff: Date) throws {
+        if let session = loadSession() {
+            let windows = session.windows.map { snapshot in
+                PersistedBrowserWindowSnapshot(
+                    id: snapshot.id,
+                    state: snapshot.state.pruningAIHistory(olderThan: cutoff),
+                    lastUpdatedAt: snapshot.lastUpdatedAt
+                )
+            }
+            try saveSession(PersistedBrowserWindowSession(windows: windows))
+        }
+
+        if let state = load() {
+            try write(state.pruningAIHistory(olderThan: cutoff), to: fileURL)
         }
     }
 
@@ -233,12 +287,21 @@ struct BrowserPersistenceStore {
     }
 
     private func saveSession(_ session: PersistedBrowserWindowSession) throws {
+        try write(session, to: sessionFileURL)
+    }
+
+    private func write<T: Encodable>(_ value: T, to url: URL) throws {
         try ensureDirectoryExists()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(session)
-        try data.write(to: sessionFileURL, options: .atomic)
+        let data = try encoder.encode(value)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func removeFileIfPresent(_ url: URL) throws {
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        try fileManager.removeItem(at: url)
     }
 
     private func ensureDirectoryExists() throws {
@@ -269,5 +332,101 @@ private extension PersistedBrowserState {
                 return snapshot.url != nil || snapshot.navigationHistory?.isEmpty == false
             }
         }
+    }
+
+    func clearingAIHistory() -> PersistedBrowserState {
+        PersistedBrowserState(
+            tabs: tabs.map { $0.clearingAIHistory() },
+            activeTabID: activeTabID,
+            isTabBarVisible: isTabBarVisible,
+            tabBarWidth: tabBarWidth,
+            chatPaneWidth: chatPaneWidth,
+            chatPaneHeight: chatPaneHeight,
+            chatPaneOffsetX: chatPaneOffsetX,
+            chatPaneOffsetY: chatPaneOffsetY,
+            pageChats: nil
+        )
+    }
+
+    func pruningBrowsingData(olderThan cutoff: Date) -> PersistedBrowserState {
+        let retainedTabs = tabs.filter { tab in
+            tab.kind == .briefing || tab.lastAccessedAt >= cutoff || tab.isPinned || (tab.isFavorite ?? false)
+        }
+        let retainedActiveTabID = activeTabID.flatMap { id in
+            retainedTabs.contains { $0.id == id } ? id : nil
+        }
+
+        return PersistedBrowserState(
+            tabs: retainedTabs,
+            activeTabID: retainedActiveTabID ?? retainedTabs.first?.id,
+            isTabBarVisible: isTabBarVisible,
+            tabBarWidth: tabBarWidth,
+            chatPaneWidth: chatPaneWidth,
+            chatPaneHeight: chatPaneHeight,
+            chatPaneOffsetX: chatPaneOffsetX,
+            chatPaneOffsetY: chatPaneOffsetY,
+            pageChats: pageChats
+        )
+    }
+
+    func pruningAIHistory(olderThan cutoff: Date) -> PersistedBrowserState {
+        PersistedBrowserState(
+            tabs: tabs.map { $0.pruningAIHistory(olderThan: cutoff) },
+            activeTabID: activeTabID,
+            isTabBarVisible: isTabBarVisible,
+            tabBarWidth: tabBarWidth,
+            chatPaneWidth: chatPaneWidth,
+            chatPaneHeight: chatPaneHeight,
+            chatPaneOffsetX: chatPaneOffsetX,
+            chatPaneOffsetY: chatPaneOffsetY,
+            pageChats: pageChats?.filter { $0.updatedAt >= cutoff }
+        )
+    }
+}
+
+private extension PersistedTabSnapshot {
+    func clearingAIHistory() -> PersistedTabSnapshot {
+        PersistedTabSnapshot(
+            id: id,
+            kind: kind,
+            title: title,
+            url: url,
+            navigationHistory: navigationHistory,
+            navigationHistoryIndex: navigationHistoryIndex,
+            isFavorite: isFavorite,
+            isPinned: isPinned,
+            createdAt: createdAt,
+            lastAccessedAt: lastAccessedAt,
+            briefing: briefing?.clearingAIHistory()
+        )
+    }
+
+    func pruningAIHistory(olderThan cutoff: Date) -> PersistedTabSnapshot {
+        guard lastAccessedAt < cutoff else { return self }
+        return clearingAIHistory()
+    }
+}
+
+private extension PersistedBriefingSnapshot {
+    func clearingAIHistory() -> PersistedBriefingSnapshot {
+        PersistedBriefingSnapshot(
+            document: document,
+            phase: phase,
+            conversationHistory: []
+        )
+    }
+}
+
+private extension PersistedBrowserWindowSession {
+    func clearingAIHistory() -> PersistedBrowserWindowSession {
+        PersistedBrowserWindowSession(
+            windows: windows.map { snapshot in
+                PersistedBrowserWindowSnapshot(
+                    id: snapshot.id,
+                    state: snapshot.state.clearingAIHistory(),
+                    lastUpdatedAt: snapshot.lastUpdatedAt
+                )
+            }
+        )
     }
 }
