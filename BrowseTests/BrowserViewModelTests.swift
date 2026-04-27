@@ -176,4 +176,30 @@ struct BrowserViewModelTests {
         #expect(!viewModel.isChatPaneVisible)
         #expect(viewModel.chatViewModel == nil)
     }
+
+    @Test("Reopening a closed web tab creates a fresh web view")
+    func reopeningClosedWebTabCreatesFreshWebView() throws {
+        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let tab = try #require(viewModel.activeTab)
+        let originalWebVM = try #require(tab.webTabViewModel)
+        let previousURL = try #require(URL(string: "https://example.com/previous"))
+        let url = try #require(URL(string: "https://example.com/article"))
+
+        tab.url = url
+        originalWebVM.currentURL = url
+        originalWebVM.pageTitle = "Example Article"
+        originalWebVM.restoreNavigationHistory([previousURL, url], currentIndex: 1)
+
+        viewModel.closeTab(tab.id)
+        viewModel.reopenLastClosedTab()
+
+        let reopenedTab = try #require(viewModel.activeTab)
+        let reopenedWebVM = try #require(reopenedTab.webTabViewModel)
+
+        #expect(reopenedTab.url == url)
+        #expect(reopenedTab.title == "Example Article")
+        #expect(reopenedWebVM !== originalWebVM)
+        #expect(reopenedWebVM.navigationHistorySnapshot == [previousURL, url])
+        #expect(reopenedWebVM.navigationHistorySnapshotIndex == 1)
+    }
 }

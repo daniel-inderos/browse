@@ -17,6 +17,15 @@ final class BrowserViewModel {
     private struct RecentlyClosedTab {
         let tab: Tab
         let index: Int
+        let navigationHistory: [URL]?
+        let navigationHistoryIndex: Int?
+    }
+
+    private struct WebTabPersistenceSignature: Equatable {
+        let title: String
+        let url: URL?
+        let navigationHistory: [URL]?
+        let navigationHistoryIndex: Int?
     }
 
     var tabs: [Tab] = []
@@ -55,6 +64,7 @@ final class BrowserViewModel {
     private var pageChatViewModelsByKey: [String: ChatViewModel] = [:]
     private var visiblePageChatKeys: Set<String> = []
     @ObservationIgnored private var currentURLCopyIndicatorHideTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduledPersistStateTask: Task<Void, Never>?
     @ObservationIgnored private let settingsObserverBag = NotificationObserverBag()
     private let maxRecentlyClosedTabs = 20
     private let maxPersistedPageChats = 120
@@ -179,6 +189,9 @@ final class BrowserViewModel {
                 }
             }
         }
+        if let activeTab {
+            loadStoredURLIfNeeded(for: activeTab)
+        }
         syncChatPanePresentationForActiveTab()
         persistState()
     }
@@ -198,6 +211,9 @@ final class BrowserViewModel {
             activeTabID = id
         }
         tabs.first?.lastAccessedAt = Date()
+        if let activeTab {
+            loadStoredURLIfNeeded(for: activeTab)
+        }
         syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
@@ -223,6 +239,9 @@ final class BrowserViewModel {
             }
         }
         tabs.first(where: { $0.id == activeTabID })?.lastAccessedAt = Date()
+        if let activeTab {
+            loadStoredURLIfNeeded(for: activeTab)
+        }
         syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
@@ -287,10 +306,6 @@ final class BrowserViewModel {
     func reopenLastClosedTab() {
         guard let recentlyClosedTab = recentlyClosedTabs.popLast() else { return }
         let reopenedTab = recentlyClosedTab.tab
-        if reopenedTab.kind == .web, let webVM = reopenedTab.webTabViewModel {
-            wireWebTabState(for: reopenedTab, webVM: webVM)
-            syncWebTabState(reopenedTab, from: webVM)
-        }
 
         let insertionIndex = min(recentlyClosedTab.index, tabs.count)
         withAnimation(tabAnimation) {
@@ -300,6 +315,15 @@ final class BrowserViewModel {
         reopenedTab.lastAccessedAt = Date()
 
         if reopenedTab.kind == .web {
+            if let webVM = ensureWebTabViewModel(for: reopenedTab),
+               let navigationHistory = recentlyClosedTab.navigationHistory,
+               !navigationHistory.isEmpty {
+                webVM.restoreNavigationHistory(
+                    navigationHistory,
+                    currentIndex: recentlyClosedTab.navigationHistoryIndex
+                )
+            }
+            loadStoredURLIfNeeded(for: reopenedTab)
             let currentURL = reopenedTab.webTabViewModel?.currentURL ?? reopenedTab.url
             if currentURL == nil {
                 requestIntentBarFocus()
@@ -315,7 +339,17 @@ final class BrowserViewModel {
 
     private func rememberClosedTab(_ tab: Tab, at index: Int) {
         guard !isPrivateBrowsing else { return }
-        recentlyClosedTabs.append(RecentlyClosedTab(tab: tab, index: index))
+        let navigationHistory = makeNavigationHistorySnapshot(for: tab)
+        let navigationHistoryIndex = tab.webTabViewModel?.navigationHistorySnapshotIndex
+        discardLiveWebView(for: tab)
+        recentlyClosedTabs.append(
+            RecentlyClosedTab(
+                tab: tab,
+                index: index,
+                navigationHistory: navigationHistory,
+                navigationHistoryIndex: navigationHistoryIndex
+            )
+        )
         if recentlyClosedTabs.count > maxRecentlyClosedTabs {
             recentlyClosedTabs.removeFirst(recentlyClosedTabs.count - maxRecentlyClosedTabs)
         }
@@ -327,6 +361,7 @@ final class BrowserViewModel {
         }
         if let tab = tabs.first(where: { $0.id == id }) {
             tab.lastAccessedAt = Date()
+            loadStoredURLIfNeeded(for: tab)
         }
         syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
@@ -808,6 +843,9 @@ final class BrowserViewModel {
             )
         }
         let validGroupIDs = Set(tabGroups.map(\.id))
+        let restoredActiveTabID = persisted.activeTabID.flatMap { id in
+            persisted.tabs.contains(where: { $0.id == id }) ? id : nil
+        } ?? persisted.tabs.first?.id
 
         tabs = persisted.tabs.map { snapshot in
             let tab = Tab(
@@ -831,7 +869,6 @@ final class BrowserViewModel {
                 wireWebTabState(for: tab, webVM: webVM)
                 if let url = restoredCurrentURL(from: snapshot, history: history, historyIndex: historyIndex) {
                     tab.url = url
-                    webVM.navigate(to: url)
                 }
             } else if tab.kind == .briefing {
                 let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
@@ -855,9 +892,7 @@ final class BrowserViewModel {
             return tab
         }
 
-        activeTabID = persisted.activeTabID.flatMap { id in
-            tabs.contains(where: { $0.id == id }) ? id : nil
-        } ?? tabs.first?.id
+        activeTabID = restoredActiveTabID
 
         isTabBarVisible = persisted.isTabBarVisible
         tabBarWidth = max(180, min(CGFloat(persisted.tabBarWidth), 360))
@@ -875,27 +910,15 @@ final class BrowserViewModel {
             min: minChatPaneHeight,
             max: maxChatPaneHeight
         )
+        if let activeTab {
+            loadStoredURLIfNeeded(for: activeTab)
+        }
         syncChatPanePresentationForActiveTab()
         return true
     }
 
     private func makePersistedState() -> PersistedBrowserState {
-        let tabSnapshots = tabs.map { tab in
-            PersistedTabSnapshot(
-                id: tab.id,
-                kind: tab.kind,
-                title: tab.title,
-                url: tab.url,
-                groupID: tab.groupID,
-                navigationHistory: makeNavigationHistorySnapshot(for: tab),
-                navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex,
-                isFavorite: tab.isFavorite,
-                isPinned: tab.isPinned,
-                createdAt: tab.createdAt,
-                lastAccessedAt: tab.lastAccessedAt,
-                briefing: makeBriefingSnapshot(for: tab)
-            )
-        }
+        let tabSnapshots = tabs.map(makePersistedTabSnapshot)
         return PersistedBrowserState(
             tabs: tabSnapshots,
             tabGroups: tabGroups.map { group in
@@ -919,6 +942,23 @@ final class BrowserViewModel {
 
     private func persistState() {
         guard allowsStatePersistence else { return }
+        scheduledPersistStateTask?.cancel()
+        scheduledPersistStateTask = nil
+        writePersistedState()
+    }
+
+    private func schedulePersistState() {
+        guard allowsStatePersistence else { return }
+        scheduledPersistStateTask?.cancel()
+        scheduledPersistStateTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            self?.scheduledPersistStateTask = nil
+            self?.writePersistedState()
+        }
+    }
+
+    private func writePersistedState() {
         persistenceStore.save(makePersistedState(), forWindowID: windowID)
     }
 
@@ -987,6 +1027,32 @@ final class BrowserViewModel {
             return history
         }
         return tab.url.map { [$0] }
+    }
+
+    private func makePersistedTabSnapshot(for tab: Tab) -> PersistedTabSnapshot {
+        PersistedTabSnapshot(
+            id: tab.id,
+            kind: tab.kind,
+            title: tab.title,
+            url: tab.url,
+            groupID: tab.groupID,
+            navigationHistory: makeNavigationHistorySnapshot(for: tab),
+            navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex,
+            isFavorite: tab.isFavorite,
+            isPinned: tab.isPinned,
+            createdAt: tab.createdAt,
+            lastAccessedAt: tab.lastAccessedAt,
+            briefing: makeBriefingSnapshot(for: tab)
+        )
+    }
+
+    private func webTabPersistenceSignature(for tab: Tab) -> WebTabPersistenceSignature {
+        WebTabPersistenceSignature(
+            title: tab.title,
+            url: tab.url,
+            navigationHistory: makeNavigationHistorySnapshot(for: tab),
+            navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex
+        )
     }
 
     private func makePersistedPageChatSnapshots() -> [PersistedPageChatSnapshot]? {
@@ -1059,14 +1125,45 @@ final class BrowserViewModel {
         return tab
     }
 
+    @discardableResult
+    private func ensureWebTabViewModel(for tab: Tab) -> WebTabViewModel? {
+        guard tab.kind == .web else { return nil }
+        if let webVM = tab.webTabViewModel {
+            return webVM
+        }
+
+        let webVM = WebTabViewModel(websiteDataStore: websiteDataStore)
+        tab.webTabViewModel = webVM
+        wireWebTabState(for: tab, webVM: webVM)
+        return webVM
+    }
+
+    private func loadStoredURLIfNeeded(for tab: Tab) {
+        guard let webVM = ensureWebTabViewModel(for: tab) else { return }
+        guard webVM.currentURL == nil, let url = tab.url else { return }
+        webVM.navigate(to: url)
+    }
+
+    private func discardLiveWebView(for tab: Tab) {
+        guard tab.kind == .web, let webVM = tab.webTabViewModel else { return }
+        syncWebTabState(tab, from: webVM)
+        webVM.stopLoading()
+        tab.isLoading = false
+        tab.webTabViewModel = nil
+    }
+
     private func wireWebTabState(for tab: Tab, webVM: WebTabViewModel) {
         webVM.onOpenURLInNewTab = { [weak self] url, activates in
             self?.openSourceInNewTab(url, activates: activates)
         }
         webVM.onStateChange = { [weak self, weak tab, weak webVM] in
             guard let self, let tab, let webVM else { return }
+            let persistedBefore = self.webTabPersistenceSignature(for: tab)
             self.syncWebTabState(tab, from: webVM)
-            self.persistState()
+            let persistedAfter = self.webTabPersistenceSignature(for: tab)
+            if persistedAfter != persistedBefore {
+                self.schedulePersistState()
+            }
 
             // Keep chat pane tied to the current page URL for the active tab.
             if tab.id == self.activeTabID {
@@ -1214,10 +1311,18 @@ final class BrowserViewModel {
     }
 
     private func syncWebTabState(_ tab: Tab, from webVM: WebTabViewModel) {
-        tab.url = webVM.currentURL
+        if webVM.currentURL != nil || tab.url == nil {
+            tab.url = webVM.currentURL
+        }
         tab.isLoading = webVM.isLoading
-        tab.faviconURL = webVM.faviconURL
-        if !webVM.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if webVM.faviconURL != nil || webVM.currentURL != nil || tab.url == nil {
+            tab.faviconURL = webVM.faviconURL
+        }
+        let pageTitle = webVM.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldUseWebTitle =
+            !pageTitle.isEmpty &&
+            (webVM.currentURL != nil || tab.url == nil || webVM.pageTitle != "New Tab")
+        if shouldUseWebTitle {
             tab.title = webVM.pageTitle
         } else if let host = webVM.currentURL?.host {
             tab.title = host
