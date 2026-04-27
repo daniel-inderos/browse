@@ -136,6 +136,62 @@ struct BrowserPersistenceStoreTests {
         #expect(store.loadWindowState(forWindowID: recentWindowID)?.tabs.first?.title == "Recent")
     }
 
+    @Test("saves tab group metadata and tab membership")
+    func savesTabGroupMetadataAndTabMembership() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        let groupID = UUID()
+        let url = URL(string: "https://example.com/grouped")!
+        let state = PersistedBrowserState(
+            tabs: [
+                PersistedTabSnapshot(
+                    id: UUID(),
+                    kind: .web,
+                    title: "Grouped",
+                    url: url,
+                    groupID: groupID,
+                    navigationHistory: [url],
+                    navigationHistoryIndex: 0,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(),
+                    lastAccessedAt: Date(),
+                    briefing: nil
+                )
+            ],
+            tabGroups: [
+                PersistedTabGroupSnapshot(
+                    id: groupID,
+                    title: "Research",
+                    isCollapsed: true,
+                    createdAt: Date()
+                )
+            ],
+            activeTabID: nil,
+            isTabBarVisible: true,
+            tabBarWidth: 220,
+            chatPaneWidth: nil,
+            chatPaneHeight: nil,
+            chatPaneOffsetX: nil,
+            chatPaneOffsetY: nil,
+            pageChats: nil
+        )
+
+        store.save(state, forWindowID: windowID)
+
+        let loadedState = try #require(store.loadWindowState(forWindowID: windowID))
+        #expect(loadedState.tabGroups?.first?.id == groupID)
+        #expect(loadedState.tabGroups?.first?.title == "Research")
+        #expect(loadedState.tabGroups?.first?.isCollapsed == true)
+        #expect(loadedState.tabs.first?.groupID == groupID)
+    }
+
     private func makeState(
         tabTitle: String,
         url: URL?,

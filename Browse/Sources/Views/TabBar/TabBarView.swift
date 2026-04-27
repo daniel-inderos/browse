@@ -8,6 +8,10 @@ struct TabBarView: View {
 
     @State private var draggingTabID: UUID?
     @State private var dragOffset: CGFloat = 0
+    @State private var groupIDBeingRenamed: UUID?
+    @State private var pendingGroupTitle = ""
+    @State private var isRenameGroupAlertPresented = false
+    @State private var dropTargetGroupID: UUID?
 
     // Row-height estimates (padding + content + spacing) used as swap thresholds.
     private let compactRowHeight: CGFloat = 26
@@ -31,18 +35,20 @@ struct TabBarView: View {
 
     private var todayTabs: [Tab] {
         browserVM.tabs.filter {
-            !$0.isFavorite && !$0.isPinned && Calendar.current.isDateInToday($0.lastAccessedAt)
+            !$0.isFavorite && !$0.isPinned && $0.groupID == nil
+                && Calendar.current.isDateInToday($0.lastAccessedAt)
         }
     }
 
     private var earlierTabs: [Tab] {
         browserVM.tabs.filter {
-            !$0.isFavorite && !$0.isPinned && !Calendar.current.isDateInToday($0.lastAccessedAt)
+            !$0.isFavorite && !$0.isPinned && $0.groupID == nil
+                && !Calendar.current.isDateInToday($0.lastAccessedAt)
         }
     }
 
     private var hasStandardTabs: Bool {
-        !pinnedTabs.isEmpty || !todayTabs.isEmpty || !earlierTabs.isEmpty
+        !pinnedTabs.isEmpty || !browserVM.tabGroups.isEmpty || !todayTabs.isEmpty || !earlierTabs.isEmpty
     }
 
     private var favoriteGridColumns: [GridItem] {
@@ -87,6 +93,17 @@ struct TabBarView: View {
                         sectionDivider
                     }
 
+                    // --- Folder / Tab Group Sections ---
+                    if !browserVM.tabGroups.isEmpty {
+                        ForEach(browserVM.tabGroups) { group in
+                            tabGroupSection(group)
+                                .transition(tabTransition)
+                        }
+                        if !todayTabs.isEmpty || !earlierTabs.isEmpty {
+                            sectionDivider
+                        }
+                    }
+
                     // --- Today Section ---
                     if !todayTabs.isEmpty {
                         sectionHeader("Today")
@@ -112,32 +129,60 @@ struct TabBarView: View {
                 .padding(.vertical, 4)
                 .animation(tabListAnimation, value: browserVM.tabs.map(\.isPinned))
                 .animation(tabListAnimation, value: browserVM.tabs.map(\.isFavorite))
+                .animation(tabListAnimation, value: browserVM.tabs.map(\.groupID))
+                .animation(tabListAnimation, value: browserVM.tabGroups)
             }
 
             Spacer(minLength: 0)
 
             // New tab button — pinned at the bottom of the sidebar
-            Button(action: { browserVM.newTab() }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("New Tab")
-                        .font(.system(size: 12, weight: .medium))
+            HStack(spacing: 6) {
+                Button(action: { browserVM.newTab() }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("New Tab")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                    )
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
-                )
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Button(action: { browserVM.createTabGroup() }) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.04))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("New Folder")
             }
-            .buttonStyle(.plain)
-            .padding(.leading, 8)
+            .padding(.horizontal, 8)
             .padding(.bottom, 10)
         }
         .background(BrowseColor.tabBarBackground)
+        .alert("Rename Folder", isPresented: $isRenameGroupAlertPresented) {
+            TextField("Folder Name", text: $pendingGroupTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                if let groupIDBeingRenamed {
+                    browserVM.renameTabGroup(groupIDBeingRenamed, title: pendingGroupTitle)
+                }
+                groupIDBeingRenamed = nil
+            }
+        }
     }
 
     // MARK: - Section Components
@@ -158,6 +203,99 @@ struct TabBarView: View {
             .frame(height: 0.5)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
+    }
+
+    private func tabGroupSection(_ group: TabGroup) -> some View {
+        let tabs = groupedTabs(for: group)
+        let isDropTargeted = dropTargetGroupID == group.id
+
+        return VStack(spacing: 2) {
+            Button {
+                browserVM.toggleTabGroupCollapsed(group.id)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: group.isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .frame(width: 10)
+                    Image(systemName: group.isCollapsed ? "folder" : "folder.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(group.title)
+                        .font(BrowseFont.badge)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Text("\(tabs.count)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+                .padding(.bottom, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isDropTargeted ? BrowseColor.accent.opacity(0.10) : Color.clear)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .dropDestination(for: String.self) { items, _ in
+                guard let draggedTabID = draggedTabID(from: items) else { return false }
+                return moveDraggedTab(draggedTabID, to: group.id)
+            } isTargeted: { isTargeted in
+                if isTargeted {
+                    dropTargetGroupID = group.id
+                } else if dropTargetGroupID == group.id {
+                    dropTargetGroupID = nil
+                }
+            }
+            .contextMenu {
+                Button("Rename Folder") {
+                    beginRenaming(group)
+                }
+                Button("Ungroup Tabs") {
+                    browserVM.ungroupTabs(in: group.id)
+                }
+                .disabled(tabs.isEmpty)
+                Button("Delete Folder", role: .destructive) {
+                    browserVM.deleteTabGroup(group.id)
+                }
+            }
+
+            if !group.isCollapsed {
+                ForEach(tabs) { tab in
+                    tabItem(tab, compact: false)
+                        .transition(tabTransition)
+                }
+            }
+        }
+    }
+
+    private func groupedTabs(for group: TabGroup) -> [Tab] {
+        browserVM.tabs.filter {
+            !$0.isFavorite && !$0.isPinned && $0.groupID == group.id
+        }
+    }
+
+    private func beginRenaming(_ group: TabGroup) {
+        groupIDBeingRenamed = group.id
+        pendingGroupTitle = group.title
+        isRenameGroupAlertPresented = true
+    }
+
+    private func draggedTabID(from items: [String]) -> UUID? {
+        items.compactMap { UUID(uuidString: $0) }.first
+    }
+
+    private func moveDraggedTab(_ tabID: UUID, to groupID: UUID) -> Bool {
+        guard let tab = browserVM.tabs.first(where: { $0.id == tabID }) else { return false }
+        guard !tab.isPinned && !tab.isFavorite else { return false }
+        guard tab.groupID != groupID else { return false }
+
+        browserVM.moveTab(tabID, toGroup: groupID)
+        performReorderHapticFeedback()
+        return true
     }
 
     // MARK: - Tab Item with Drag-to-Reorder
@@ -210,7 +348,10 @@ struct TabBarView: View {
             },
             onDuplicate: { browserVM.duplicateTab(tab.id) },
             onTogglePin: { browserVM.togglePin(tab.id) },
-            onToggleFavorite: { browserVM.toggleFavorite(tab.id) }
+            onToggleFavorite: { browserVM.toggleFavorite(tab.id) },
+            tabGroups: browserVM.tabGroups,
+            onCreateFolderFromTab: { browserVM.createTabGroup(containing: tab.id) },
+            onMoveToGroup: { browserVM.moveTab(tab.id, toGroup: $0) }
         )
         // --- Visual feedback for the dragged item ---
         .offset(y: isDragging ? dragOffset : 0)
@@ -228,6 +369,7 @@ struct TabBarView: View {
             isDragging ? nil : tabListAnimation,
             value: browserVM.tabs.map(\.id)
         )
+        .draggable(tab.id.uuidString)
         .simultaneousGesture(reorderGesture(for: tab, rowHeight: rowHeight))
     }
 
@@ -299,11 +441,13 @@ struct TabBarView: View {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
-    /// Two tabs belong to the same drag section when they share pinned state
-    /// and, for unpinned tabs, the same "today vs earlier" grouping.
+    /// Two tabs belong to the same drag section when they share pinned state,
+    /// folder membership, and, for ungrouped tabs, the same date grouping.
     private func sameDragSection(_ a: Tab, _ b: Tab) -> Bool {
         guard a.isPinned == b.isPinned else { return false }
         if a.isPinned { return true }
+        guard a.groupID == b.groupID else { return false }
+        if a.groupID != nil { return true }
         return Calendar.current.isDateInToday(a.lastAccessedAt)
             == Calendar.current.isDateInToday(b.lastAccessedAt)
     }

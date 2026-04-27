@@ -12,6 +12,7 @@ final class Tab: Identifiable {
     var kind: TabKind
     var title: String
     var url: URL?
+    var groupID: UUID?
     var faviconURL: URL?
     var tintColor: Color?
     var isLoading: Bool
@@ -50,6 +51,7 @@ final class Tab: Identifiable {
         kind: TabKind,
         title: String = "New Tab",
         url: URL? = nil,
+        groupID: UUID? = nil,
         isFavorite: Bool = false,
         isPinned: Bool = false,
         createdAt: Date = Date(),
@@ -59,6 +61,7 @@ final class Tab: Identifiable {
         self.kind = kind
         self.title = title
         self.url = url
+        self.groupID = groupID
         self.isLoading = false
         self.isFavorite = isFavorite
         self.isPinned = isPinned

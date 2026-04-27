@@ -12,6 +12,9 @@ struct TabItemView: View {
     let onDuplicate: () -> Void
     let onTogglePin: () -> Void
     let onToggleFavorite: () -> Void
+    let tabGroups: [TabGroup]
+    let onCreateFolderFromTab: () -> Void
+    let onMoveToGroup: (UUID?) -> Void
 
     @State private var isHovering = false
 
@@ -26,7 +29,10 @@ struct TabItemView: View {
         onCopyURL: @escaping () -> Void,
         onDuplicate: @escaping () -> Void,
         onTogglePin: @escaping () -> Void,
-        onToggleFavorite: @escaping () -> Void
+        onToggleFavorite: @escaping () -> Void,
+        tabGroups: [TabGroup],
+        onCreateFolderFromTab: @escaping () -> Void,
+        onMoveToGroup: @escaping (UUID?) -> Void
     ) {
         self.tab = tab
         self.isActive = isActive
@@ -39,6 +45,9 @@ struct TabItemView: View {
         self.onDuplicate = onDuplicate
         self.onTogglePin = onTogglePin
         self.onToggleFavorite = onToggleFavorite
+        self.tabGroups = tabGroups
+        self.onCreateFolderFromTab = onCreateFolderFromTab
+        self.onMoveToGroup = onMoveToGroup
     }
 
     var body: some View {
@@ -107,6 +116,10 @@ struct TabItemView: View {
             Button("Duplicate") {
                 onDuplicate()
             }
+            if !tab.isPinned {
+                Divider()
+                tabGroupMenu
+            }
         }
         .animation(.easeOut(duration: 0.15), value: isHovering)
         .animation(.easeOut(duration: 0.15), value: isActive)
@@ -130,6 +143,29 @@ struct TabItemView: View {
             return AnyShapeStyle(BrowseColor.accent.opacity(0.06))
         } else {
             return AnyShapeStyle(Color.clear)
+        }
+    }
+
+    @ViewBuilder
+    private var tabGroupMenu: some View {
+        Button("New Folder from Tab") {
+            onCreateFolderFromTab()
+        }
+
+        if !tabGroups.isEmpty {
+            Menu("Move to Folder") {
+                Button("No Folder") {
+                    onMoveToGroup(nil)
+                }
+                .disabled(tab.groupID == nil)
+
+                ForEach(tabGroups) { group in
+                    Button(group.title) {
+                        onMoveToGroup(group.id)
+                    }
+                    .disabled(tab.groupID == group.id)
+                }
+            }
         }
     }
 

@@ -69,6 +69,7 @@ struct PersistedTabSnapshot: Codable {
     let kind: TabKind
     let title: String
     let url: URL?
+    var groupID: UUID? = nil
     let navigationHistory: [URL]?
     let navigationHistoryIndex: Int?
     let isFavorite: Bool?
@@ -76,6 +77,13 @@ struct PersistedTabSnapshot: Codable {
     let createdAt: Date
     let lastAccessedAt: Date
     let briefing: PersistedBriefingSnapshot?
+}
+
+struct PersistedTabGroupSnapshot: Codable {
+    let id: UUID
+    let title: String
+    let isCollapsed: Bool
+    let createdAt: Date
 }
 
 struct PersistedPageChatSnapshot: Codable {
@@ -88,6 +96,7 @@ struct PersistedPageChatSnapshot: Codable {
 
 struct PersistedBrowserState: Codable {
     let tabs: [PersistedTabSnapshot]
+    var tabGroups: [PersistedTabGroupSnapshot]? = nil
     let activeTabID: UUID?
     let isTabBarVisible: Bool
     let tabBarWidth: Double
@@ -338,6 +347,7 @@ private extension PersistedBrowserState {
     func clearingAIHistory() -> PersistedBrowserState {
         PersistedBrowserState(
             tabs: tabs.map { $0.clearingAIHistory() },
+            tabGroups: tabGroups,
             activeTabID: activeTabID,
             isTabBarVisible: isTabBarVisible,
             tabBarWidth: tabBarWidth,
@@ -359,6 +369,7 @@ private extension PersistedBrowserState {
 
         return PersistedBrowserState(
             tabs: retainedTabs,
+            tabGroups: tabGroups,
             activeTabID: retainedActiveTabID ?? retainedTabs.first?.id,
             isTabBarVisible: isTabBarVisible,
             tabBarWidth: tabBarWidth,
@@ -373,6 +384,7 @@ private extension PersistedBrowserState {
     func pruningAIHistory(olderThan cutoff: Date) -> PersistedBrowserState {
         PersistedBrowserState(
             tabs: tabs.map { $0.pruningAIHistory(olderThan: cutoff) },
+            tabGroups: tabGroups,
             activeTabID: activeTabID,
             isTabBarVisible: isTabBarVisible,
             tabBarWidth: tabBarWidth,
@@ -392,6 +404,7 @@ private extension PersistedTabSnapshot {
             kind: kind,
             title: title,
             url: url,
+            groupID: groupID,
             navigationHistory: navigationHistory,
             navigationHistoryIndex: navigationHistoryIndex,
             isFavorite: isFavorite,

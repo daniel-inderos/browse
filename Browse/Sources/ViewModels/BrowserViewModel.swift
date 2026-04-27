@@ -20,6 +20,7 @@ final class BrowserViewModel {
     }
 
     var tabs: [Tab] = []
+    var tabGroups: [TabGroup] = []
     var activeTabID: UUID?
     var isIntentBarFocused: Bool = false
     var intentBarFocusRequestID: Int = 0
@@ -69,13 +70,20 @@ final class BrowserViewModel {
 
     private var shortcutOrderedTabs: [Tab] {
         let calendar = Calendar.current
+        let standardTabs = tabs.filter { !$0.isFavorite && !$0.isPinned }
+        let groupedTabs = tabGroups.flatMap { group in
+            standardTabs.filter { $0.groupID == group.id }
+        }
+        let ungroupedTabs = standardTabs.filter { $0.groupID == nil }
+
         return tabs.filter { $0.isFavorite }
             + tabs.filter { $0.isPinned && !$0.isFavorite }
-            + tabs.filter {
-                !$0.isFavorite && !$0.isPinned && calendar.isDateInToday($0.lastAccessedAt)
+            + groupedTabs
+            + ungroupedTabs.filter {
+                calendar.isDateInToday($0.lastAccessedAt)
             }
-            + tabs.filter {
-                !$0.isFavorite && !$0.isPinned && !calendar.isDateInToday($0.lastAccessedAt)
+            + ungroupedTabs.filter {
+                !calendar.isDateInToday($0.lastAccessedAt)
             }
     }
 
@@ -151,11 +159,13 @@ final class BrowserViewModel {
     func closeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let closedTab = tabs[index]
+        let affectedGroupIDs = Set([closedTab.groupID].compactMap { $0 })
         briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
         rememberClosedTab(closedTab, at: index)
 
         withAnimation(tabAnimation) {
             tabs.remove(at: index)
+            removeEmptyTabGroups(affectedGroupIDs)
 
             if activeTabID == id {
                 if tabs.isEmpty {
@@ -176,6 +186,7 @@ final class BrowserViewModel {
     func closeOtherTabs(keeping id: UUID) {
         guard tabs.contains(where: { $0.id == id }) else { return }
         let closedTabs = tabs.enumerated().filter { $0.element.id != id }
+        let affectedGroupIDs = Set(closedTabs.compactMap { $0.element.groupID })
         closedTabs.forEach { originalIndex, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
             rememberClosedTab(closedTab, at: originalIndex)
@@ -183,6 +194,7 @@ final class BrowserViewModel {
 
         withAnimation(tabAnimation) {
             tabs.removeAll { $0.id != id }
+            removeEmptyTabGroups(affectedGroupIDs)
             activeTabID = id
         }
         tabs.first?.lastAccessedAt = Date()
@@ -197,6 +209,7 @@ final class BrowserViewModel {
         guard closeRangeStart < tabs.endIndex else { return }
 
         let closedTabs = Array(tabs[closeRangeStart...])
+        let affectedGroupIDs = Set(closedTabs.compactMap(\.groupID))
         closedTabs.enumerated().forEach { offset, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
             rememberClosedTab(closedTab, at: closeRangeStart + offset)
@@ -204,6 +217,7 @@ final class BrowserViewModel {
 
         withAnimation(tabAnimation) {
             tabs.removeSubrange(closeRangeStart...)
+            removeEmptyTabGroups(affectedGroupIDs)
             if activeTabID != nil, !tabs.contains(where: { $0.id == activeTabID }) {
                 activeTabID = id
             }
@@ -224,6 +238,7 @@ final class BrowserViewModel {
             duplicatedTab = makeWebTab(
                 title: sourceTab.title,
                 url: sourceTab.url,
+                groupID: sourceTab.groupID,
                 isFavorite: sourceTab.isFavorite,
                 isPinned: sourceTab.isPinned
             )
@@ -238,6 +253,7 @@ final class BrowserViewModel {
             let tab = Tab(
                 kind: .briefing,
                 title: sourceTab.title,
+                groupID: sourceTab.groupID,
                 isFavorite: sourceTab.isFavorite,
                 isPinned: sourceTab.isPinned
             )
@@ -378,6 +394,62 @@ final class BrowserViewModel {
         guard let tab = tabs.first(where: { $0.id == id }) else { return }
         tab.isFavorite.toggle()
         persistState()
+    }
+
+    @discardableResult
+    func createTabGroup(title: String = "New Folder", containing tabID: UUID? = nil) -> UUID {
+        let resolvedTitle = normalizedGroupTitle(title)
+        let group = TabGroup(title: resolvedTitle)
+        tabGroups.append(group)
+        if let tabID {
+            moveTab(tabID, toGroup: group.id)
+        } else {
+            persistState()
+        }
+        return group.id
+    }
+
+    func renameTabGroup(_ id: UUID, title: String) {
+        guard let index = tabGroups.firstIndex(where: { $0.id == id }) else { return }
+        tabGroups[index].title = normalizedGroupTitle(title)
+        persistState()
+    }
+
+    func toggleTabGroupCollapsed(_ id: UUID) {
+        guard let index = tabGroups.firstIndex(where: { $0.id == id }) else { return }
+        tabGroups[index].isCollapsed.toggle()
+        persistState()
+    }
+
+    func moveTab(_ tabID: UUID, toGroup groupID: UUID?) {
+        guard let tab = tabs.first(where: { $0.id == tabID }) else { return }
+        if let groupID, !tabGroups.contains(where: { $0.id == groupID }) { return }
+        tab.groupID = groupID
+        if let groupID,
+           let groupIndex = tabGroups.firstIndex(where: { $0.id == groupID }) {
+            tabGroups[groupIndex].isCollapsed = false
+        }
+        persistState()
+    }
+
+    func ungroupTabs(in groupID: UUID) {
+        guard tabGroups.contains(where: { $0.id == groupID }) else { return }
+        tabs.filter { $0.groupID == groupID }.forEach { $0.groupID = nil }
+        persistState()
+    }
+
+    func deleteTabGroup(_ groupID: UUID) {
+        guard let index = tabGroups.firstIndex(where: { $0.id == groupID }) else { return }
+        tabs.filter { $0.groupID == groupID }.forEach { $0.groupID = nil }
+        tabGroups.remove(at: index)
+        persistState()
+    }
+
+    private func removeEmptyTabGroups(_ groupIDs: Set<UUID>) {
+        guard !groupIDs.isEmpty else { return }
+        tabGroups.removeAll { group in
+            groupIDs.contains(group.id) && !tabs.contains { $0.groupID == group.id }
+        }
     }
 
     /// Called after a gesture-driven reorder finishes to persist the new tab order.
@@ -600,7 +672,7 @@ final class BrowserViewModel {
             activeTab.title = url.host ?? url.absoluteString
             activeTab.lastAccessedAt = Date()
         } else {
-            let tab = makeWebTab(title: url.host ?? "Loading...", url: url)
+            let tab = makeWebTab(title: url.host ?? "Loading...", url: url, groupID: activeTab?.groupID)
             withAnimation(tabAnimation) {
                 tabs.append(tab)
                 activeTabID = tab.id
@@ -635,7 +707,7 @@ final class BrowserViewModel {
             wireBriefingState(for: activeTab, briefingVM: vm)
             activeTab.lastAccessedAt = Date()
         } else {
-            let tab = Tab(kind: .briefing, title: query)
+            let tab = Tab(kind: .briefing, title: query, groupID: activeTab?.groupID)
             tab.briefingViewModel = vm
             wireBriefingState(for: tab, briefingVM: vm)
             withAnimation(tabAnimation) {
@@ -681,10 +753,15 @@ final class BrowserViewModel {
         return fallbackURL?.displayHost ?? "Untitled Tab"
     }
 
+    private func normalizedGroupTitle(_ title: String) -> String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty ? "New Folder" : trimmedTitle
+    }
+
     // MARK: - Source Navigation
 
     func openSourceInNewTab(_ url: URL) {
-        let tab = makeWebTab(title: url.host ?? "Loading...", url: url)
+        let tab = makeWebTab(title: url.host ?? "Loading...", url: url, groupID: activeTab?.groupID)
         withAnimation(tabAnimation) {
             tabs.append(tab)
             activeTabID = tab.id
@@ -718,12 +795,23 @@ final class BrowserViewModel {
             }
         }
 
+        tabGroups = (persisted.tabGroups ?? []).map { snapshot in
+            TabGroup(
+                id: snapshot.id,
+                title: normalizedGroupTitle(snapshot.title),
+                isCollapsed: snapshot.isCollapsed,
+                createdAt: snapshot.createdAt
+            )
+        }
+        let validGroupIDs = Set(tabGroups.map(\.id))
+
         tabs = persisted.tabs.map { snapshot in
             let tab = Tab(
                 id: snapshot.id,
                 kind: snapshot.kind,
                 title: snapshot.title,
                 url: snapshot.url,
+                groupID: snapshot.groupID.flatMap { validGroupIDs.contains($0) ? $0 : nil },
                 isFavorite: snapshot.isFavorite ?? false,
                 isPinned: snapshot.isPinned,
                 createdAt: snapshot.createdAt,
@@ -794,6 +882,7 @@ final class BrowserViewModel {
                 kind: tab.kind,
                 title: tab.title,
                 url: tab.url,
+                groupID: tab.groupID,
                 navigationHistory: makeNavigationHistorySnapshot(for: tab),
                 navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex,
                 isFavorite: tab.isFavorite,
@@ -805,6 +894,14 @@ final class BrowserViewModel {
         }
         return PersistedBrowserState(
             tabs: tabSnapshots,
+            tabGroups: tabGroups.map { group in
+                PersistedTabGroupSnapshot(
+                    id: group.id,
+                    title: group.title,
+                    isCollapsed: group.isCollapsed,
+                    createdAt: group.createdAt
+                )
+            },
             activeTabID: activeTabID,
             isTabBarVisible: isTabBarVisible,
             tabBarWidth: Double(tabBarWidth),
@@ -935,6 +1032,7 @@ final class BrowserViewModel {
         title: String,
         url: URL? = nil,
         id: UUID = UUID(),
+        groupID: UUID? = nil,
         isFavorite: Bool = false,
         isPinned: Bool = false,
         createdAt: Date = Date(),
@@ -945,6 +1043,7 @@ final class BrowserViewModel {
             kind: .web,
             title: title,
             url: url,
+            groupID: groupID,
             isFavorite: isFavorite,
             isPinned: isPinned,
             createdAt: createdAt,
