@@ -350,7 +350,7 @@ struct BriefingPageView: View {
             }
 
             Button(action: {
-                Task { await viewModel.generate() }
+                viewModel.startGeneration()
             }) {
                 Text("Try Again")
                     .font(.system(size: 13, weight: .semibold))

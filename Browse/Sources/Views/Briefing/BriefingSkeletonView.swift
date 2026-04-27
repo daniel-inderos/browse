@@ -10,7 +10,6 @@ struct BriefingSkeletonView: View {
                 Circle()
                     .fill(BrowseColor.accent)
                     .frame(width: 6, height: 6)
-                    .modifier(PulsingEffect())
 
                 Text(phaseLabel)
                     .font(BrowseFont.briefingCaption)
@@ -69,55 +68,12 @@ struct SkeletonLine: View {
     let width: CGFloat
     var height: CGFloat = 12
 
-    @State private var shimmerOffset: CGFloat = -1.0
-
     var body: some View {
         GeometryReader { geo in
             RoundedRectangle(cornerRadius: height / 3)
                 .fill(Color.primary.opacity(0.05))
                 .frame(width: geo.size.width * width)
-                .overlay(
-                    // Shimmer sweep
-                    RoundedRectangle(cornerRadius: height / 3)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.clear,
-                                    Color.primary.opacity(0.06),
-                                    Color.clear,
-                                ],
-                                startPoint: UnitPoint(x: shimmerOffset - 0.3, y: 0.5),
-                                endPoint: UnitPoint(x: shimmerOffset + 0.3, y: 0.5)
-                            )
-                        )
-                        .frame(width: geo.size.width * width)
-                )
         }
         .frame(height: height)
-        .onAppear {
-            withAnimation(
-                .easeInOut(duration: 1.35)
-                .repeatForever(autoreverses: false)
-                .delay(Double.random(in: 0...0.3))
-            ) {
-                shimmerOffset = 2.0
-            }
-        }
-    }
-}
-
-// MARK: - Pulsing Effect
-
-private struct PulsingEffect: ViewModifier {
-    @State private var isPulsing = false
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(isPulsing ? 0.3 : 1.0)
-            .animation(
-                .easeInOut(duration: 0.7).repeatForever(autoreverses: true),
-                value: isPulsing
-            )
-            .onAppear { isPulsing = true }
     }
 }

@@ -32,36 +32,43 @@ struct APIKeyStore: @unchecked Sendable {
         }
 
         private static func findDotEnv(fileManager: FileManager, sourceFilePath: String) -> URL? {
-            let startURLs = [
-                URL(fileURLWithPath: fileManager.currentDirectoryPath),
-                URL(fileURLWithPath: CommandLine.arguments.first ?? fileManager.currentDirectoryPath)
-                    .deletingLastPathComponent(),
-                Bundle.main.bundleURL,
-                URL(fileURLWithPath: sourceFilePath).deletingLastPathComponent(),
+            let executablePath = CommandLine.arguments.first ?? fileManager.currentDirectoryPath
+            let startPaths = [
+                fileManager.currentDirectoryPath,
+                (executablePath as NSString).deletingLastPathComponent,
+                Bundle.main.bundleURL.path,
+                (sourceFilePath as NSString).deletingLastPathComponent,
             ]
 
-            for startURL in startURLs {
-                if let envURL = findDotEnv(ascendingFrom: startURL, fileManager: fileManager) {
+            for startPath in startPaths {
+                if let envURL = findDotEnv(ascendingFromPath: startPath, fileManager: fileManager) {
                     return envURL
                 }
             }
             return nil
         }
 
-        private static func findDotEnv(ascendingFrom startURL: URL, fileManager: FileManager) -> URL? {
-            var directory = startURL.standardizedFileURL
-            while true {
-                let envURL = directory.appendingPathComponent(".env")
-                if fileManager.fileExists(atPath: envURL.path) {
-                    return envURL
+        private static func findDotEnv(ascendingFromPath startPath: String, fileManager: FileManager) -> URL? {
+            var directory = (startPath as NSString).standardizingPath
+            var visited = Set<String>()
+
+            for _ in 0..<64 {
+                guard !visited.contains(directory) else { return nil }
+                visited.insert(directory)
+
+                let envPath = (directory as NSString).appendingPathComponent(".env")
+                if fileManager.fileExists(atPath: envPath) {
+                    return URL(fileURLWithPath: envPath)
                 }
 
-                let parent = directory.deletingLastPathComponent()
-                guard parent.path != directory.path else {
+                let parent = (directory as NSString).deletingLastPathComponent
+                guard !parent.isEmpty, parent != directory else {
                     return nil
                 }
                 directory = parent
             }
+
+            return nil
         }
 
         private static func parse(_ content: String) -> [String: String] {

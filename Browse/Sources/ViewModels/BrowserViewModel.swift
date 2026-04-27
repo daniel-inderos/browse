@@ -173,6 +173,7 @@ final class BrowserViewModel {
         let closedTab = tabs[index]
         let affectedGroupIDs = Set([closedTab.groupID].compactMap { $0 })
         briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
+        cancelLiveBriefingWork(for: closedTab)
         rememberClosedTab(closedTab, at: index)
 
         withAnimation(tabAnimation) {
@@ -204,6 +205,7 @@ final class BrowserViewModel {
         let affectedGroupIDs = Set(closedTabs.compactMap { $0.element.groupID })
         closedTabs.forEach { originalIndex, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
+            cancelLiveBriefingWork(for: closedTab)
             rememberClosedTab(closedTab, at: originalIndex)
         }
 
@@ -230,6 +232,7 @@ final class BrowserViewModel {
         let affectedGroupIDs = Set(closedTabs.compactMap(\.groupID))
         closedTabs.enumerated().forEach { offset, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
+            cancelLiveBriefingWork(for: closedTab)
             rememberClosedTab(closedTab, at: closeRangeStart + offset)
         }
 
@@ -355,6 +358,10 @@ final class BrowserViewModel {
         if recentlyClosedTabs.count > maxRecentlyClosedTabs {
             recentlyClosedTabs.removeFirst(recentlyClosedTabs.count - maxRecentlyClosedTabs)
         }
+    }
+
+    private func cancelLiveBriefingWork(for tab: Tab) {
+        tab.briefingViewModel?.cancelGeneration()
     }
 
     func selectTab(_ id: UUID) {
@@ -756,9 +763,7 @@ final class BrowserViewModel {
 
         syncChatPanePresentationForActiveTab()
         persistState()
-        Task {
-            await vm.generate()
-        }
+        vm.startGeneration()
     }
 
     private func canReuseAsNewTab(_ tab: Tab) -> Bool {
@@ -882,7 +887,9 @@ final class BrowserViewModel {
                 )
 
                 if let briefingSnapshot = snapshot.briefing {
-                    briefingVM.document = briefingSnapshot.document
+                    var document = briefingSnapshot.document
+                    document.isStreaming = false
+                    briefingVM.document = document
                     briefingVM.phase = makeBriefingPhase(from: briefingSnapshot.phase)
                     briefingVM.conversationHistory = briefingSnapshot.conversationHistory
                 }
@@ -1381,10 +1388,8 @@ final class BrowserViewModel {
         switch phase {
         case .idle:
             return .idle
-        case .searching:
-            return .searching
-        case .synthesizing:
-            return .synthesizing
+        case .searching, .synthesizing:
+            return .error("Briefing was interrupted. Try again.")
         case .complete:
             return .complete
         case .error(let message):
@@ -1396,10 +1401,8 @@ final class BrowserViewModel {
         switch phase {
         case .idle:
             return .idle
-        case .searching:
-            return .searching
-        case .synthesizing:
-            return .synthesizing
+        case .searching, .synthesizing:
+            return .error("Briefing was interrupted. Try again.")
         case .complete:
             return .complete
         case .error(let message):

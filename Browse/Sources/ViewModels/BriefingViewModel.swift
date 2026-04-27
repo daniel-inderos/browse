@@ -30,11 +30,42 @@ final class BriefingViewModel {
 
     private var lastParseTime: Date = .distantPast
     private let parseInterval: TimeInterval = 0.15
+    @ObservationIgnored private var generationTask: Task<Void, Never>?
+    @ObservationIgnored private var generationRunID = UUID()
 
     init(query: String, exaClient: ExaAPIClient, claudeClient: ClaudeAPIClient) {
         self.document = BriefingDocument(query: query)
         self.exaClient = exaClient
         self.claudeClient = claudeClient
+    }
+
+    deinit {
+        generationTask?.cancel()
+    }
+
+    @MainActor
+    func startGeneration() {
+        generationTask?.cancel()
+
+        let runID = UUID()
+        generationRunID = runID
+        generationTask = Task { [weak self] in
+            guard let self else { return }
+            await self.generate()
+            await MainActor.run { [weak self] in
+                guard let self, self.generationRunID == runID else { return }
+                self.generationTask = nil
+            }
+        }
+    }
+
+    @MainActor
+    func cancelGeneration() {
+        generationTask?.cancel()
+        generationTask = nil
+        guard document.isStreaming else { return }
+        document.isStreaming = false
+        onStateChange?()
     }
 
     @MainActor
