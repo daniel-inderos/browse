@@ -83,6 +83,7 @@ struct PersistedPageChatSnapshot: Codable {
     let pageTitle: String
     let conversationHistory: [ConversationMessage]
     let updatedAt: Date
+    let isSidebarVisible: Bool?
 }
 
 struct PersistedBrowserState: Codable {

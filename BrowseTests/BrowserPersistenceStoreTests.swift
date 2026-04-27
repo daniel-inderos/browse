@@ -218,7 +218,8 @@ struct BrowserPersistenceStoreTests {
                     conversationHistory: [
                         ConversationMessage(role: .user, content: "Question")
                     ],
-                    updatedAt: Date()
+                    updatedAt: Date(),
+                    isSidebarVisible: nil
                 )
             ]
         )

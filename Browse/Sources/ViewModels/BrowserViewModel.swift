@@ -50,6 +50,8 @@ final class BrowserViewModel {
     private var intentBarRevealHoverGraceDeadline: Date = .distantPast
     private var recentlyClosedTabs: [RecentlyClosedTab] = []
     private var pageChatSnapshotsByKey: [String: PersistedPageChatSnapshot] = [:]
+    private var pageChatViewModelsByKey: [String: ChatViewModel] = [:]
+    private var visiblePageChatKeys: Set<String> = []
     @ObservationIgnored private let settingsObserverBag = NotificationObserverBag()
     private let maxRecentlyClosedTabs = 20
     private let maxPersistedPageChats = 120
@@ -119,6 +121,7 @@ final class BrowserViewModel {
             activeTabID = tab.id
         }
         tab.lastAccessedAt = Date()
+        syncChatPanePresentationForActiveTab()
         isIntentBarVisible = true
         requestIntentBarFocus()
         persistState()
@@ -145,6 +148,7 @@ final class BrowserViewModel {
                 }
             }
         }
+        syncChatPanePresentationForActiveTab()
         persistState()
     }
 
@@ -161,6 +165,7 @@ final class BrowserViewModel {
             activeTabID = id
         }
         tabs.first?.lastAccessedAt = Date()
+        syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
     }
@@ -183,6 +188,7 @@ final class BrowserViewModel {
             }
         }
         tabs.first(where: { $0.id == activeTabID })?.lastAccessedAt = Date()
+        syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
     }
@@ -236,6 +242,7 @@ final class BrowserViewModel {
             activeTabID = duplicatedTab.id
         }
         duplicatedTab.lastAccessedAt = Date()
+        syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
     }
@@ -265,6 +272,7 @@ final class BrowserViewModel {
         } else {
             isIntentBarFocused = false
         }
+        syncChatPanePresentationForActiveTab()
         persistState()
     }
 
@@ -282,16 +290,8 @@ final class BrowserViewModel {
         }
         if let tab = tabs.first(where: { $0.id == id }) {
             tab.lastAccessedAt = Date()
-
-            // Reset chat pane context when switching tabs
-            if isChatPaneVisible {
-                if tab.kind == .web, let webVM = tab.webTabViewModel, webVM.currentURL != nil {
-                    updateChatContextIfNeeded(for: webVM)
-                } else {
-                    closeChatPane()
-                }
-            }
         }
+        syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
     }
@@ -387,15 +387,29 @@ final class BrowserViewModel {
     func openChatPane() {
         guard let activeTab, activeTab.kind == .web,
               let webVM = activeTab.webTabViewModel,
-              webVM.currentURL != nil else { return }
+              let pageURL = webVM.currentURL else { return }
 
-        updateChatContextIfNeeded(for: webVM)
+        visiblePageChatKeys.insert(pageURL.chatSessionKey)
+        activateChatContext(for: webVM)
 
         isChatPaneVisible = true
+        if let chatViewModel {
+            persistChatSnapshotIfNeeded(from: chatViewModel)
+        } else {
+            persistState()
+        }
     }
 
     func closeChatPane() {
+        if let pageURL = activeTab?.webTabViewModel?.currentURL {
+            visiblePageChatKeys.remove(pageURL.chatSessionKey)
+        }
         isChatPaneVisible = false
+        if let chatViewModel {
+            persistChatSnapshotIfNeeded(from: chatViewModel)
+        } else {
+            persistState()
+        }
     }
 
     func clearChatForCurrentPage() {
@@ -417,7 +431,10 @@ final class BrowserViewModel {
         guard !isPrivateBrowsing else { return }
 
         pageChatSnapshotsByKey = [:]
-        chatViewModel?.clearConversation()
+        pageChatViewModelsByKey = [:]
+        visiblePageChatKeys = []
+        isChatPaneVisible = false
+        chatViewModel = nil
         for tab in tabs where tab.kind == .briefing {
             tab.briefingViewModel?.conversationHistory = []
         }
@@ -607,6 +624,7 @@ final class BrowserViewModel {
             tab.lastAccessedAt = Date()
         }
 
+        syncChatPanePresentationForActiveTab()
         persistState()
         Task {
             await vm.generate()
@@ -663,6 +681,8 @@ final class BrowserViewModel {
         guard let persisted = persistenceStore.loadWindowState(forWindowID: windowID) else { return false }
         guard !persisted.tabs.isEmpty else { return false }
         pageChatSnapshotsByKey = [:]
+        pageChatViewModelsByKey = [:]
+        visiblePageChatKeys = []
         if let persistedPageChats = persisted.pageChats {
             for snapshot in persistedPageChats {
                 let key = snapshot.pageURL.chatSessionKey
@@ -671,6 +691,9 @@ final class BrowserViewModel {
                     continue
                 }
                 pageChatSnapshotsByKey[key] = snapshot
+                if snapshot.isSidebarVisible == true {
+                    visiblePageChatKeys.insert(key)
+                }
             }
         }
 
@@ -739,6 +762,7 @@ final class BrowserViewModel {
             min: minChatPaneHeight,
             max: maxChatPaneHeight
         )
+        syncChatPanePresentationForActiveTab()
         return true
     }
 
@@ -846,21 +870,40 @@ final class BrowserViewModel {
     private func makePersistedPageChatSnapshots() -> [PersistedPageChatSnapshot]? {
         var snapshotsByKey = pageChatSnapshotsByKey
 
-        // Ensure the in-memory active chat is not dropped if it changed very recently.
-        if let chatVM = chatViewModel,
-           let pageURL = chatVM.pageURL,
-           !chatVM.conversationHistory.isEmpty {
+        // Ensure in-memory chats are not dropped if they changed very recently.
+        for (key, chatVM) in pageChatViewModelsByKey {
+            guard let pageURL = chatVM.pageURL else { continue }
+            let shouldKeepSnapshot =
+                !chatVM.conversationHistory.isEmpty ||
+                visiblePageChatKeys.contains(key)
+            guard shouldKeepSnapshot else {
+                snapshotsByKey.removeValue(forKey: key)
+                continue
+            }
+
             let title = resolvedChatPageTitle(for: chatVM, pageURL: pageURL)
-            snapshotsByKey[pageURL.chatSessionKey] = PersistedPageChatSnapshot(
+            snapshotsByKey[key] = PersistedPageChatSnapshot(
                 pageURL: pageURL,
                 pageTitle: title,
                 conversationHistory: chatVM.conversationHistory,
-                updatedAt: Date()
+                updatedAt: Date(),
+                isSidebarVisible: visiblePageChatKeys.contains(key) ? true : nil
+            )
+        }
+
+        snapshotsByKey = snapshotsByKey.mapValues { snapshot in
+            let key = snapshot.pageURL.chatSessionKey
+            return PersistedPageChatSnapshot(
+                pageURL: snapshot.pageURL,
+                pageTitle: snapshot.pageTitle,
+                conversationHistory: snapshot.conversationHistory,
+                updatedAt: snapshot.updatedAt,
+                isSidebarVisible: visiblePageChatKeys.contains(key) ? true : nil
             )
         }
 
         let snapshots = snapshotsByKey.values
-            .filter { !$0.conversationHistory.isEmpty }
+            .filter { !$0.conversationHistory.isEmpty || $0.isSidebarVisible == true }
             .sorted { $0.updatedAt > $1.updatedAt }
 
         guard !snapshots.isEmpty else { return nil }
@@ -899,10 +942,8 @@ final class BrowserViewModel {
             self.persistState()
 
             // Keep chat pane tied to the current page URL for the active tab.
-            if tab.id == self.activeTabID,
-               self.isChatPaneVisible,
-               webVM.currentURL != nil {
-                self.updateChatContextIfNeeded(for: webVM)
+            if tab.id == self.activeTabID {
+                self.syncChatPanePresentation(for: webVM)
             }
         }
         webVM.onScrollPositionChange = { [weak self, weak tab] offsetY in
@@ -920,21 +961,55 @@ final class BrowserViewModel {
         }
     }
 
-    private func updateChatContextIfNeeded(for webVM: WebTabViewModel) {
-        guard let pageURL = webVM.currentURL else { return }
-
-        if let existingChatVM = chatViewModel,
-           isSameChatPage(existingChatVM.pageURL, pageURL) {
+    private func syncChatPanePresentationForActiveTab() {
+        guard let activeTab, activeTab.kind == .web,
+              let webVM = activeTab.webTabViewModel else {
+            isChatPaneVisible = false
+            chatViewModel = nil
             return
         }
 
-        let vm = makeChatViewModel()
-        if !isPrivateBrowsing,
-           let snapshot = pageChatSnapshotsByKey[pageURL.chatSessionKey] {
-            vm.restoreConversationHistory(snapshot.conversationHistory)
+        syncChatPanePresentation(for: webVM)
+    }
+
+    private func syncChatPanePresentation(for webVM: WebTabViewModel) {
+        guard let pageURL = webVM.currentURL else {
+            isChatPaneVisible = false
+            chatViewModel = nil
+            return
         }
-        vm.primePageContext(url: pageURL, title: webVM.pageTitle)
+
+        let key = pageURL.chatSessionKey
+        guard visiblePageChatKeys.contains(key) else {
+            isChatPaneVisible = false
+            chatViewModel = nil
+            return
+        }
+
+        activateChatContext(for: webVM)
+        isChatPaneVisible = true
+    }
+
+    private func activateChatContext(for webVM: WebTabViewModel) {
+        guard let pageURL = webVM.currentURL else { return }
+        let key = pageURL.chatSessionKey
+
+        let vm: ChatViewModel
+        if let existing = pageChatViewModelsByKey[key] {
+            vm = existing
+        } else {
+            vm = makeChatViewModel()
+            if !isPrivateBrowsing,
+               let snapshot = pageChatSnapshotsByKey[key] {
+                vm.restoreConversationHistory(snapshot.conversationHistory)
+            }
+            vm.primePageContext(url: pageURL, title: webVM.pageTitle)
+            pageChatViewModelsByKey[key] = vm
+        }
+
         chatViewModel = vm
+
+        guard vm.pageContent == nil || !isSameChatPage(vm.pageURL, pageURL) else { return }
 
         Task { @MainActor [weak self, weak vm] in
             guard let self, let vm else { return }
@@ -962,15 +1037,17 @@ final class BrowserViewModel {
 
         let resolvedHistory = history ?? chatVM.conversationHistory
         let key = pageURL.chatSessionKey
+        let isSidebarVisibleForPage = visiblePageChatKeys.contains(key)
 
-        if resolvedHistory.isEmpty {
+        if resolvedHistory.isEmpty && !isSidebarVisibleForPage {
             pageChatSnapshotsByKey.removeValue(forKey: key)
         } else {
             pageChatSnapshotsByKey[key] = PersistedPageChatSnapshot(
                 pageURL: pageURL,
                 pageTitle: resolvedChatPageTitle(for: chatVM, pageURL: pageURL),
                 conversationHistory: resolvedHistory,
-                updatedAt: Date()
+                updatedAt: Date(),
+                isSidebarVisible: isSidebarVisibleForPage ? true : nil
             )
             trimPageChatSnapshotsIfNeeded()
         }
