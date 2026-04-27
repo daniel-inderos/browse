@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let persistenceLogger = Logger(subsystem: "com.browse.app", category: "Persistence")
 
 enum PersistedBriefingPhase: Codable {
     case idle
@@ -167,7 +170,7 @@ struct BrowserPersistenceStore {
 
             try saveSession(PersistedBrowserWindowSession(windows: snapshots))
         } catch {
-            print("[Browse/Persistence] Failed to save window state: \(error)")
+            persistenceLogger.error("Failed to save window state; category=\(Self.errorCategory(error), privacy: .public)")
         }
     }
 
@@ -177,7 +180,7 @@ struct BrowserPersistenceStore {
             snapshots.removeAll { $0.id == windowID }
             try saveSession(PersistedBrowserWindowSession(windows: snapshots))
         } catch {
-            print("[Browse/Persistence] Failed to remove window state: \(error)")
+            persistenceLogger.error("Failed to remove window state; category=\(Self.errorCategory(error), privacy: .public)")
         }
     }
 
@@ -189,7 +192,7 @@ struct BrowserPersistenceStore {
             }
             try saveSession(PersistedBrowserWindowSession(windows: prunedSnapshots))
         } catch {
-            print("[Browse/Persistence] Failed to prune window states: \(error)")
+            persistenceLogger.error("Failed to prune window states; category=\(Self.errorCategory(error), privacy: .public)")
         }
     }
 
@@ -214,7 +217,7 @@ struct BrowserPersistenceStore {
             try data.write(to: fileURL, options: .atomic)
         } catch {
             // Persistence errors should never crash the app.
-            print("[Browse/Persistence] Failed to save state: \(error)")
+            persistenceLogger.error("Failed to save state; category=\(Self.errorCategory(error), privacy: .public)")
         }
     }
 
@@ -243,6 +246,16 @@ struct BrowserPersistenceStore {
         if !fileManager.fileExists(atPath: directory.path) {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+    }
+
+    private static func errorCategory(_ error: Error) -> String {
+        if let cocoaError = error as? CocoaError {
+            return "cocoa-\(cocoaError.errorCode)"
+        }
+        if let posixError = error as? POSIXError {
+            return "posix-\(posixError.code.rawValue)"
+        }
+        return "unknown"
     }
 }
 

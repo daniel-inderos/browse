@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import os.log
+import OSLog
 import Foundation
 
 private let logger = Logger(subsystem: "com.browse.app", category: "Lifecycle")
@@ -76,20 +76,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let bundleID = Bundle.main.bundleIdentifier, !bundleID.isEmpty {
-            logger.info("Launched as bundle: \(bundleID, privacy: .public)")
-            logger.info("Bundle path: \(Bundle.main.bundlePath, privacy: .public)")
+            logger.info("Launched as bundle: \(bundleID, privacy: .private)")
         } else {
             logger.warning("Launched without a bundle identifier")
         }
 
-        // Log code-signing status for diagnostics
-        let signingInfo: String
-        if let teamID = Bundle.main.infoDictionary?["TeamIdentifierPrefix"] as? String {
-            signingInfo = "Team ID: \(teamID)"
-        } else {
-            signingInfo = "ad-hoc signed (no Team ID)"
-        }
-        logger.info("Signing: \(signingInfo, privacy: .public)")
+        // Log only coarse code-signing status; team identifiers are private.
+        let signingStatus = Bundle.main.infoDictionary?["TeamIdentifierPrefix"] is String
+            ? "team-signed"
+            : "ad-hoc"
+        logger.info("Signing status: \(signingStatus, privacy: .public)")
 
         // ── Window setup ────────────────────────────────────────
         // Ensure Browse becomes frontmost and receives keyboard input when launched

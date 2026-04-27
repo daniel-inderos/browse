@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let claudeLogger = Logger(subsystem: "com.browse.app", category: "Claude")
 
 enum ClaudeAPIError: Error, LocalizedError {
     case noAPIKey
@@ -9,9 +12,9 @@ enum ClaudeAPIError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noAPIKey: "Claude API key not configured. Open Settings to add it."
-        case .httpError(let code, let body): "HTTP \(code): \(body)"
-        case .decodingError(let msg): "Decoding error: \(msg)"
-        case .networkError(let err): "Network error: \(err.localizedDescription)"
+        case .httpError(let code, _): "HTTP \(code)"
+        case .decodingError: "Decoding error"
+        case .networkError: "Network error"
         }
     }
 }
@@ -56,7 +59,8 @@ final class ClaudeAPIClient: Sendable {
                     )
                     request.httpBody = try JSONEncoder().encode(body)
 
-                    print("[Browse/Claude] Sending request, model=\(self.model), system=\(system.count) chars, user=\(messages.first?.content.count ?? 0) chars")
+                    let messageCharacterCount = messages.reduce(0) { $0 + $1.content.count }
+                    claudeLogger.info("Sending stream request; model=\(self.model, privacy: .public), systemChars=\(system.count, privacy: .public), messageCount=\(messages.count, privacy: .public), messageChars=\(messageCharacterCount, privacy: .public)")
 
                     let (bytes, response) = try await self.session.bytes(for: request)
 
@@ -67,7 +71,7 @@ final class ClaudeAPIClient: Sendable {
                         return
                     }
 
-                    print("[Browse/Claude] HTTP \(httpResponse.statusCode)")
+                    claudeLogger.info("Received stream response; statusCode=\(httpResponse.statusCode, privacy: .public)")
 
                     // For non-200, read the full body as error
                     guard httpResponse.statusCode == 200 else {
@@ -76,10 +80,11 @@ final class ClaudeAPIClient: Sendable {
                             errorBody.append(byte)
                             if errorBody.count > 2000 { break }
                         }
-                        let errorStr = String(data: errorBody, encoding: .utf8) ?? "Unknown error"
-                        print("[Browse/Claude] Error body: \(errorStr.prefix(500))")
+                        let redactedBodySummary = "redacted \(errorBody.count) bytes"
+                        claudeLogger.error("Stream request failed; statusCode=\(httpResponse.statusCode, privacy: .public), bodyBytes=\(errorBody.count, privacy: .public)")
                         continuation.finish(throwing: ClaudeAPIError.httpError(
-                            statusCode: httpResponse.statusCode, body: errorStr
+                            statusCode: httpResponse.statusCode,
+                            body: redactedBodySummary
                         ))
                         return
                     }
@@ -109,12 +114,12 @@ final class ClaudeAPIClient: Sendable {
                                 continuation.yield(event)
 
                                 if case .messageStop = event {
-                                    print("[Browse/Claude] Complete: \(eventCount) events, \(textLength) chars")
+                                    claudeLogger.info("Stream completed; eventCount=\(eventCount, privacy: .public), textChars=\(textLength, privacy: .public)")
                                     continuation.finish()
                                     return
                                 }
                                 if case .error(let msg) = event {
-                                    print("[Browse/Claude] Error event: \(msg)")
+                                    claudeLogger.error("Stream returned error event; messageLength=\(msg.count, privacy: .public)")
                                     continuation.finish(throwing: ClaudeAPIError.decodingError(msg))
                                     return
                                 }
@@ -138,10 +143,10 @@ final class ClaudeAPIClient: Sendable {
                         continuation.yield(event)
                     }
 
-                    print("[Browse/Claude] Stream ended: \(eventCount) events, \(textLength) chars")
+                    claudeLogger.info("Stream ended; eventCount=\(eventCount, privacy: .public), textChars=\(textLength, privacy: .public)")
                     continuation.finish()
                 } catch {
-                    print("[Browse/Claude] Exception: \(error)")
+                    claudeLogger.error("Stream request threw; category=\(Self.errorCategory(error), privacy: .public)")
                     continuation.finish(throwing: error)
                 }
             }
@@ -174,5 +179,28 @@ final class ClaudeAPIClient: Sendable {
         let (_, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else { return false }
         return httpResponse.statusCode == 200
+    }
+
+    private static func errorCategory(_ error: Error) -> String {
+        switch error {
+        case ClaudeAPIError.noAPIKey:
+            return "missing-api-key"
+        case ClaudeAPIError.httpError(let statusCode, _):
+            return "http-\(statusCode)"
+        case ClaudeAPIError.decodingError:
+            return "decoding"
+        case ClaudeAPIError.networkError:
+            return "network"
+        case is DecodingError:
+            return "decoding"
+        case is EncodingError:
+            return "encoding"
+        case is CancellationError:
+            return "cancelled"
+        case let urlError as URLError:
+            return "url-\(urlError.errorCode)"
+        default:
+            return "unknown"
+        }
     }
 }

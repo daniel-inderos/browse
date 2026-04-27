@@ -618,20 +618,20 @@ Per-page chat persistence depends on `URL.chatSessionKey`; update tests if that 
 
 All persisted browser state should remain Codable and backwards-tolerant where practical. Existing snapshots already use optionals for some fields to support older state files.
 
-Persistence errors are intentionally non-fatal and logged to stdout so a corrupt or unavailable state file does not crash the app.
+Persistence errors are intentionally non-fatal and logged through OSLog with coarse error categories so a corrupt or unavailable state file does not crash the app.
 
-### Logging
+### Logging and Diagnostics
 
-The app prints diagnostic messages for:
+The app emits OSLog diagnostic messages for:
 
-- lifecycle and signing state
+- lifecycle and coarse signing state
 - Exa search start/failure/count
 - Claude request and streaming status
 - SSE decoding issues
 - persistence failures
 - page content extraction failures
 
-Avoid logging secrets, raw API keys, or sensitive full page content.
+Diagnostics must not include raw user queries, page content, generated AI output, provider response bodies, SSE payload fragments, API keys, Authorization headers, local bundle paths, Team IDs, or full exception descriptions in release builds. Prefer counts, status codes, and error categories. Mark potentially identifying metadata private when it is useful for local debugging.
 
 ## Troubleshooting
 

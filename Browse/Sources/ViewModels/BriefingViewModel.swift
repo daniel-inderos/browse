@@ -1,4 +1,7 @@
 import SwiftUI
+import OSLog
+
+private let briefingLogger = Logger(subsystem: "com.browse.app", category: "Briefing")
 
 enum BriefingPhase: Equatable {
     case idle
@@ -41,14 +44,14 @@ final class BriefingViewModel {
         onStateChange?()
 
         // Phase 1: Search with Exa
-        print("[Browse/Briefing] Starting Exa search for: \(document.query)")
+        briefingLogger.info("Starting Exa search; queryLength=\(self.document.query.count, privacy: .public)")
         let exaResults: ExaSearchResponse
         do {
             exaResults = try await exaClient.search(query: document.query)
-            print("[Browse/Briefing] Exa returned \(exaResults.results.count) results")
+            briefingLogger.info("Exa search completed; resultCount=\(exaResults.results.count, privacy: .public)")
         } catch {
-            print("[Browse/Briefing] Exa search failed: \(error)")
-            phase = .error("Search failed: \(error.localizedDescription)")
+            briefingLogger.error("Exa search failed; category=\(Self.errorCategory(error), privacy: .public)")
+            phase = .error(Self.userFacingErrorMessage(error, operation: "Search"))
             document.isStreaming = false
             onStateChange?()
             return
@@ -76,7 +79,7 @@ final class BriefingViewModel {
         let systemPrompt = composer.buildSystemPrompt()
         let userMessage = composer.buildUserMessage(query: document.query, sources: exaResults.results)
 
-        print("[Browse/Briefing] Starting Claude stream...")
+        briefingLogger.info("Starting Claude stream; sourceCount=\(exaResults.results.count, privacy: .public)")
 
         let stream = claudeClient.streamMessage(
             system: systemPrompt,
@@ -94,14 +97,14 @@ final class BriefingViewModel {
                     parseIncrementally()
 
                 case .messageStop:
-                    print("[Browse/Briefing] Got messageStop. Markdown length: \(document.streamedMarkdown.count)")
+                    briefingLogger.info("Claude stream completed; markdownLength=\(self.document.streamedMarkdown.count, privacy: .public)")
                     document.isStreaming = false
                     parseFinal()
                     phase = .complete
                     onStateChange?()
 
                 case .error(let msg):
-                    print("[Browse/Briefing] Stream error event: \(msg)")
+                    briefingLogger.error("Claude stream returned error event; messageLength=\(msg.count, privacy: .public)")
                     phase = .error(msg)
                     document.isStreaming = false
                     onStateChange?()
@@ -112,7 +115,7 @@ final class BriefingViewModel {
             }
             // Stream ended without messageStop
             if document.isStreaming {
-                print("[Browse/Briefing] Stream ended without messageStop. Got text: \(receivedAnyText), length: \(document.streamedMarkdown.count)")
+                briefingLogger.warning("Claude stream ended without messageStop; receivedText=\(receivedAnyText, privacy: .public), markdownLength=\(self.document.streamedMarkdown.count, privacy: .public)")
                 document.isStreaming = false
                 if receivedAnyText {
                     parseFinal()
@@ -123,8 +126,8 @@ final class BriefingViewModel {
                 onStateChange?()
             }
         } catch {
-            print("[Browse/Briefing] Stream threw error: \(error)")
-            phase = .error("Stream failed: \(error.localizedDescription)")
+            briefingLogger.error("Claude stream failed; category=\(Self.errorCategory(error), privacy: .public)")
+            phase = .error(Self.userFacingErrorMessage(error, operation: "Stream"))
             document.isStreaming = false
             onStateChange?()
         }
@@ -188,7 +191,8 @@ final class BriefingViewModel {
             }
         } catch {
             streamingFollowUp = ""
-            phase = .error("Follow-up failed: \(error.localizedDescription)")
+            briefingLogger.error("Claude follow-up failed; category=\(Self.errorCategory(error), privacy: .public)")
+            phase = .error(Self.userFacingErrorMessage(error, operation: "Follow-up"))
             document.isStreaming = false
             onStateChange?()
         }
@@ -205,7 +209,7 @@ final class BriefingViewModel {
 
     private func parseFinal() {
         parseMarkdown()
-        print("[Browse/Briefing] Parsed: headline='\(document.headline.prefix(50))', tldr='\(document.tldr.prefix(50))', sections=\(document.sections.count)")
+        briefingLogger.debug("Parsed briefing markdown; headlineLength=\(self.document.headline.count, privacy: .public), tldrLength=\(self.document.tldr.count, privacy: .public), sections=\(self.document.sections.count, privacy: .public)")
     }
 
     private func parseMarkdown() {
@@ -282,5 +286,39 @@ final class BriefingViewModel {
             }
         }
         document.sections = sections
+    }
+
+    private static func errorCategory(_ error: Error) -> String {
+        switch error {
+        case ClaudeAPIError.noAPIKey, ExaAPIError.noAPIKey:
+            return "missing-api-key"
+        case ClaudeAPIError.httpError(let statusCode, _), ExaAPIError.httpError(let statusCode, _):
+            return "http-\(statusCode)"
+        case ClaudeAPIError.decodingError, ExaAPIError.decodingError:
+            return "decoding"
+        case ClaudeAPIError.networkError, ExaAPIError.networkError:
+            return "network"
+        case is CancellationError:
+            return "cancelled"
+        default:
+            return "unknown"
+        }
+    }
+
+    private static func userFacingErrorMessage(_ error: Error, operation: String) -> String {
+        switch error {
+        case ClaudeAPIError.noAPIKey, ExaAPIError.noAPIKey:
+            return "\(operation) failed: API key not configured. Open Settings to add it."
+        case ClaudeAPIError.httpError(let statusCode, _), ExaAPIError.httpError(let statusCode, _):
+            return "\(operation) failed: provider returned HTTP \(statusCode)."
+        case ClaudeAPIError.decodingError, ExaAPIError.decodingError:
+            return "\(operation) failed: provider response could not be decoded."
+        case ClaudeAPIError.networkError, ExaAPIError.networkError:
+            return "\(operation) failed: network error."
+        case is CancellationError:
+            return "\(operation) cancelled."
+        default:
+            return "\(operation) failed."
+        }
     }
 }

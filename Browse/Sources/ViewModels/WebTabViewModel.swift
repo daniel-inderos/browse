@@ -1,5 +1,8 @@
 import SwiftUI
 import WebKit
+import OSLog
+
+private let webTabLogger = Logger(subsystem: "com.browse.app", category: "WebTab")
 
 // MARK: - Scroll message bridge
 
@@ -152,7 +155,7 @@ final class WebTabViewModel: NSObject {
             let result = try await webView.evaluateJavaScript(js)
             return result as? String
         } catch {
-            print("[Browse/WebTab] Page content extraction failed: \(error)")
+            webTabLogger.warning("Page content extraction failed; category=\(Self.errorCategory(error), privacy: .public)")
             return nil
         }
     }
@@ -211,6 +214,16 @@ final class WebTabViewModel: NSObject {
         guard abs(offsetY - scrollOffsetY) > 0.5 else { return }
         scrollOffsetY = offsetY
         onScrollPositionChange?(offsetY)
+    }
+
+    private static func errorCategory(_ error: Error) -> String {
+        if let cocoaError = error as? CocoaError {
+            return "cocoa-\(cocoaError.errorCode)"
+        }
+        if let urlError = error as? URLError {
+            return "url-\(urlError.errorCode)"
+        }
+        return "unknown"
     }
 
     // MARK: - Navigation history

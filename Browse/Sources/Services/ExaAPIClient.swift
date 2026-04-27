@@ -9,9 +9,9 @@ enum ExaAPIError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noAPIKey: "Exa API key not configured. Open Settings to add it."
-        case .httpError(let code, let body): "HTTP \(code): \(body)"
-        case .decodingError(let msg): "Decoding error: \(msg)"
-        case .networkError(let err): "Network error: \(err.localizedDescription)"
+        case .httpError(let code, _): "HTTP \(code)"
+        case .decodingError: "Decoding error"
+        case .networkError: "Network error"
         }
     }
 }
@@ -60,8 +60,10 @@ final class ExaAPIClient: Sendable {
         }
 
         guard httpResponse.statusCode == 200 else {
-            let body = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw ExaAPIError.httpError(statusCode: httpResponse.statusCode, body: body)
+            throw ExaAPIError.httpError(
+                statusCode: httpResponse.statusCode,
+                body: "redacted \(data.count) bytes"
+            )
         }
 
         do {

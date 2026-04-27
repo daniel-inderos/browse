@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let sseLogger = Logger(subsystem: "com.browse.app", category: "SSE")
 
 struct SSEParser {
     private var currentEvent: String?
@@ -59,7 +62,7 @@ struct SSEParser {
         case "message_start":
             guard let data = jsonData,
                   let payload = try? decoder.decode(ClaudeMessageStartPayload.self, from: data) else {
-                print("[Browse/SSE] Failed to decode message_start: \(joinedData.prefix(200))")
+                sseLogger.warning("Failed to decode SSE event; event=message_start, payloadBytes=\(joinedData.utf8.count, privacy: .public)")
                 return nil
             }
             return .messageStart(messageId: payload.message.id, model: payload.message.model)
@@ -67,7 +70,7 @@ struct SSEParser {
         case "content_block_start":
             guard let data = jsonData,
                   let payload = try? decoder.decode(ClaudeContentBlockStartPayload.self, from: data) else {
-                print("[Browse/SSE] Failed to decode content_block_start: \(joinedData.prefix(200))")
+                sseLogger.warning("Failed to decode SSE event; event=content_block_start, payloadBytes=\(joinedData.utf8.count, privacy: .public)")
                 return nil
             }
             return .contentBlockStart(index: payload.index)
@@ -75,7 +78,7 @@ struct SSEParser {
         case "content_block_delta":
             guard let data = jsonData,
                   let payload = try? decoder.decode(ClaudeContentBlockDeltaPayload.self, from: data) else {
-                print("[Browse/SSE] Failed to decode content_block_delta: \(joinedData.prefix(200))")
+                sseLogger.warning("Failed to decode SSE event; event=content_block_delta, payloadBytes=\(joinedData.utf8.count, privacy: .public)")
                 return nil
             }
             if let text = payload.delta.text {
@@ -86,7 +89,7 @@ struct SSEParser {
         case "content_block_stop":
             guard let data = jsonData,
                   let payload = try? decoder.decode(ClaudeContentBlockStopPayload.self, from: data) else {
-                print("[Browse/SSE] Failed to decode content_block_stop: \(joinedData.prefix(200))")
+                sseLogger.warning("Failed to decode SSE event; event=content_block_stop, payloadBytes=\(joinedData.utf8.count, privacy: .public)")
                 return nil
             }
             return .contentBlockStop(index: payload.index)
@@ -94,7 +97,7 @@ struct SSEParser {
         case "message_delta":
             guard let data = jsonData,
                   let payload = try? decoder.decode(ClaudeMessageDeltaPayload.self, from: data) else {
-                print("[Browse/SSE] Failed to decode message_delta: \(joinedData.prefix(200))")
+                sseLogger.warning("Failed to decode SSE event; event=message_delta, payloadBytes=\(joinedData.utf8.count, privacy: .public)")
                 return nil
             }
             return .messageDelta(stopReason: payload.delta.stopReason)
@@ -108,13 +111,24 @@ struct SSEParser {
         case "error":
             guard let data = jsonData,
                   let payload = try? decoder.decode(ClaudeErrorPayload.self, from: data) else {
-                return .error("Unknown error: \(joinedData.prefix(200))")
+                sseLogger.warning("Failed to decode SSE event; event=error, payloadBytes=\(joinedData.utf8.count, privacy: .public)")
+                return .error("Provider stream error")
             }
-            return .error(payload.error.message)
+            return .error("Provider stream error: \(Self.sanitizedErrorType(payload.error.type))")
 
         default:
-            print("[Browse/SSE] Unknown event type: \(event)")
+            sseLogger.warning("Unknown SSE event type: \(event, privacy: .private)")
             return nil
         }
+    }
+
+    private static func sanitizedErrorType(_ type: String) -> String {
+        let allowed = type.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "_" || character == "-"
+        }
+        guard allowed, !type.isEmpty, type.count <= 64 else {
+            return "unknown"
+        }
+        return type
     }
 }
