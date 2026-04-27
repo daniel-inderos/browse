@@ -446,6 +446,7 @@ struct IntentBarView: View {
 
     private func navigationButtons(_ webVM: WebTabViewModel) -> some View {
         HStack(spacing: 2) {
+            navButton(icon: "sidebar.leading", enabled: true) { browserVM.toggleTabBarVisibility() }
             navButton(icon: "chevron.left", enabled: webVM.canGoBack) { webVM.goBack() }
             navButton(icon: "chevron.right", enabled: webVM.canGoForward) { webVM.goForward() }
 
