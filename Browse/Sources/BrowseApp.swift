@@ -278,6 +278,12 @@ private struct BrowserCommands: Commands {
             .keyboardShortcut("l", modifiers: .command)
             .disabled(browserViewModel == nil)
 
+            Button("Copy Current URL") {
+                copyCurrentURL()
+            }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .disabled(browserViewModel?.activeTabURL == nil)
+
             Button(browserViewModel?.isChatPaneVisible == true ? "Hide Chat" : "Chat with Page") {
                 browserViewModel?.toggleChatPane()
             }
@@ -306,5 +312,13 @@ private struct BrowserCommands: Commands {
 
     private var closeCommandTitle: String {
         browserViewModel?.activeTabID == nil ? "Close Window" : "Close Tab"
+    }
+
+    private func copyCurrentURL() {
+        guard let url = browserViewModel?.activeTabURL else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(url.absoluteString, forType: .string)
+        browserViewModel?.showCurrentURLCopiedIndicator()
     }
 }

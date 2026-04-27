@@ -32,6 +32,7 @@ final class BrowserViewModel {
     var chatPaneWidth: CGFloat = 380
     var chatPaneHeight: CGFloat = 480
     var chatViewModel: ChatViewModel?
+    var isCurrentURLCopyIndicatorVisible: Bool = false
     let isPrivateBrowsing: Bool
 
     private let windowID: UUID
@@ -52,12 +53,18 @@ final class BrowserViewModel {
     private var pageChatSnapshotsByKey: [String: PersistedPageChatSnapshot] = [:]
     private var pageChatViewModelsByKey: [String: ChatViewModel] = [:]
     private var visiblePageChatKeys: Set<String> = []
+    @ObservationIgnored private var currentURLCopyIndicatorHideTask: Task<Void, Never>?
     @ObservationIgnored private let settingsObserverBag = NotificationObserverBag()
     private let maxRecentlyClosedTabs = 20
     private let maxPersistedPageChats = 120
 
     var activeTab: Tab? {
         tabs.first { $0.id == activeTabID }
+    }
+
+    var activeTabURL: URL? {
+        guard let activeTab else { return nil }
+        return activeTab.webTabViewModel?.currentURL ?? activeTab.url
     }
 
     private var shortcutOrderedTabs: [Tab] {
@@ -74,6 +81,20 @@ final class BrowserViewModel {
 
     var canReopenClosedTab: Bool {
         !recentlyClosedTabs.isEmpty
+    }
+
+    func showCurrentURLCopiedIndicator() {
+        currentURLCopyIndicatorHideTask?.cancel()
+        isCurrentURLCopyIndicatorVisible = true
+
+        currentURLCopyIndicatorHideTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1400))
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeOut(duration: 0.16)) {
+                self?.isCurrentURLCopyIndicatorVisible = false
+            }
+        }
     }
 
     var chatTabMentionCandidates: [ChatTabMentionCandidate] {

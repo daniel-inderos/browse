@@ -31,6 +31,28 @@ struct BrowserViewModelTests {
         #expect(viewModel.activeTabID == earlier.id)
     }
 
+    @Test("Active tab URL uses live page URL before stored URL")
+    func activeTabURLUsesLivePageURLBeforeStoredURL() throws {
+        let viewModel = BrowserViewModel(restoresPersistedState: false)
+        let tab = try #require(viewModel.activeTab)
+        let webVM = try #require(tab.webTabViewModel)
+
+        tab.url = URL(string: "https://example.com/stored")
+        #expect(viewModel.activeTabURL == tab.url)
+
+        webVM.currentURL = URL(string: "https://example.com/live")
+        #expect(viewModel.activeTabURL == webVM.currentURL)
+    }
+
+    @Test("Copy URL indicator becomes visible")
+    func copyURLIndicatorBecomesVisible() {
+        let viewModel = BrowserViewModel(restoresPersistedState: false)
+
+        #expect(!viewModel.isCurrentURLCopyIndicatorVisible)
+        viewModel.showCurrentURLCopiedIndicator()
+        #expect(viewModel.isCurrentURLCopyIndicatorVisible)
+    }
+
     @Test("Page chat sidebar visibility follows the active page")
     func pageChatSidebarVisibilityFollowsActivePage() throws {
         let viewModel = BrowserViewModel(restoresPersistedState: false)

@@ -318,6 +318,7 @@ Tab number shortcuts follow the sidebar's visual grouping order:
 | Shortcut | Action |
 | --- | --- |
 | Cmd-L | Focus intent bar |
+| Cmd-Shift-C | Copy current URL |
 | Cmd-E | Toggle page chat |
 | Cmd-S | Show or hide sidebar |
 | Shift-Tab in intent bar | Toggle Search and Brief modes for the current input |

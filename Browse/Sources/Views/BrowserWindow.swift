@@ -203,6 +203,16 @@ struct BrowserWindow: View {
                         }
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                if browserVM.isCurrentURLCopyIndicatorVisible {
+                    copiedURLIndicator
+                        .padding(.top, browserVM.shouldShowIntentBar ? 52 : 12)
+                        .padding(.trailing, 14)
+                        .transition(
+                            .opacity.combined(with: .scale(scale: 0.94, anchor: .topTrailing))
+                        )
+                }
+            }
         }
         .frame(minWidth: 900, minHeight: 600)
         .ignoresSafeArea()
@@ -218,6 +228,7 @@ struct BrowserWindow: View {
         .background(WindowSessionRestorer())
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeOut(duration: 0.18), value: browserVM.shouldShowIntentBar)
+        .animation(.easeOut(duration: 0.16), value: browserVM.isCurrentURLCopyIndicatorVisible)
         .onChange(of: browserVM.isTabBarVisible) { _, _ in
             fadePageContentForSidebarChange()
         }
@@ -231,6 +242,25 @@ struct BrowserWindow: View {
         .onDisappear {
             removeNavigationKeyEventMonitor()
         }
+    }
+
+    private var copiedURLIndicator: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .bold))
+
+            Text("Copied")
+                .font(BrowseFont.badge)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            Capsule()
+                .fill(BrowseColor.success)
+                .shadow(color: Color.black.opacity(0.14), radius: 10, y: 4)
+        )
+        .accessibilityLabel("Current URL copied")
     }
 
     private func installNavigationKeyEventMonitor() {
