@@ -70,9 +70,10 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Claude API")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Powers briefing synthesis and follow-up conversations.")
+                    Text("Powers briefing synthesis and follow-up conversations. Loaded from \(viewModel.apiKeyConfigurationSource).")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 SecureField("API Key", text: Binding(
@@ -80,6 +81,7 @@ struct SettingsView: View {
                     set: { viewModel.setClaudeAPIKey($0) }
                 ))
                     .textFieldStyle(.roundedBorder)
+                    .disabled(true)
 
                 HStack(spacing: 8) {
                     Button("Test Connection") {
@@ -96,9 +98,10 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Exa Search API")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Powers web search for briefing sources.")
+                    Text("Powers web search for briefing sources. Loaded from \(viewModel.apiKeyConfigurationSource).")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 SecureField("API Key", text: Binding(
@@ -106,6 +109,7 @@ struct SettingsView: View {
                     set: { viewModel.setExaAPIKey($0) }
                 ))
                     .textFieldStyle(.roundedBorder)
+                    .disabled(true)
 
                 HStack(spacing: 8) {
                     Button("Test Connection") {

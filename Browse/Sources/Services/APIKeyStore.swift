@@ -1,149 +1,145 @@
 import Foundation
-import LocalAuthentication
-import Security
 
 struct APIKeyStore: @unchecked Sendable {
     private final class Store: @unchecked Sendable {
-        enum Entry {
-            case missing
-            case value(String)
-        }
-
-        private let service = "com.browse.app.api-keys.v2"
-        private let legacyService = "com.browse.app"
-        private let lock = NSLock()
-        private var cache: [Key: Entry] = [:]
-
         func read(_ key: Key) -> String? {
-            lock.lock()
-            defer { lock.unlock() }
+            let values = DotEnvLoader.load()
+            return key.environmentNames.lazy
+                .compactMap { values[$0]?.nonEmpty }
+                .first
+        }
+    }
 
-            if let cachedEntry = cache[key] {
-                switch cachedEntry {
-                case .missing:
+    private struct DotEnvLoader {
+        static func load(
+            environment: [String: String] = ProcessInfo.processInfo.environment,
+            fileManager: FileManager = .default,
+            sourceFilePath: String = #filePath
+        ) -> [String: String] {
+            var values = loadDotEnv(fileManager: fileManager, sourceFilePath: sourceFilePath)
+            for (key, value) in environment {
+                values[key] = value
+            }
+            return values
+        }
+
+        private static func loadDotEnv(fileManager: FileManager, sourceFilePath: String) -> [String: String] {
+            guard let envURL = findDotEnv(fileManager: fileManager, sourceFilePath: sourceFilePath),
+                  let content = try? String(contentsOf: envURL, encoding: .utf8) else {
+                return [:]
+            }
+            return parse(content)
+        }
+
+        private static func findDotEnv(fileManager: FileManager, sourceFilePath: String) -> URL? {
+            let startURLs = [
+                URL(fileURLWithPath: fileManager.currentDirectoryPath),
+                URL(fileURLWithPath: CommandLine.arguments.first ?? fileManager.currentDirectoryPath)
+                    .deletingLastPathComponent(),
+                Bundle.main.bundleURL,
+                URL(fileURLWithPath: sourceFilePath).deletingLastPathComponent(),
+            ]
+
+            for startURL in startURLs {
+                if let envURL = findDotEnv(ascendingFrom: startURL, fileManager: fileManager) {
+                    return envURL
+                }
+            }
+            return nil
+        }
+
+        private static func findDotEnv(ascendingFrom startURL: URL, fileManager: FileManager) -> URL? {
+            var directory = startURL.standardizedFileURL
+            while true {
+                let envURL = directory.appendingPathComponent(".env")
+                if fileManager.fileExists(atPath: envURL.path) {
+                    return envURL
+                }
+
+                let parent = directory.deletingLastPathComponent()
+                guard parent.path != directory.path else {
                     return nil
-                case .value(let value):
-                    return value
                 }
+                directory = parent
             }
-
-            let value = readKeychainValue(for: key, service: service)
-                ?? migrateLegacyValueIfAvailable(for: key)
-            cache[key] = value.map(Entry.value) ?? .missing
-            return value
         }
 
-        func save(_ value: String, for key: Key) throws {
-            lock.lock()
-            defer { lock.unlock() }
-
-            try saveKeychainValue(value, for: key, service: service)
-            cache[key] = .value(value)
+        private static func parse(_ content: String) -> [String: String] {
+            var values: [String: String] = [:]
+            for rawLine in content.components(separatedBy: .newlines) {
+                guard let entry = parseLine(rawLine) else { continue }
+                values[entry.key] = entry.value
+            }
+            return values
         }
 
-        func delete(_ key: Key) throws {
-            lock.lock()
-            defer { lock.unlock() }
-
-            try deleteKeychainValue(for: key, service: service)
-            try deleteKeychainValue(for: key, service: legacyService)
-            cache[key] = .missing
-        }
-
-        private func migrateLegacyValueIfAvailable(for key: Key) -> String? {
-            guard let value = readKeychainValue(for: key, service: legacyService) else {
+        private static func parseLine(_ rawLine: String) -> (key: String, value: String)? {
+            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else {
                 return nil
             }
 
-            try? saveKeychainValue(value, for: key, service: service)
-            try? deleteKeychainValue(for: key, service: legacyService)
-            return value
-        }
+            if line.hasPrefix("export ") {
+                line.removeFirst("export ".count)
+                line = line.trimmingCharacters(in: .whitespaces)
+            }
 
-        private func baseQuery(for key: Key, service: String) -> [CFString: Any] {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-
-            return [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: service,
-                kSecAttrAccount: key.rawValue,
-                kSecUseAuthenticationContext: context,
-            ]
-        }
-
-        private func readKeychainValue(for key: Key, service: String) -> String? {
-            var query = baseQuery(for: key, service: service)
-            query[kSecMatchLimit] = kSecMatchLimitOne
-            query[kSecReturnData] = true
-
-            var result: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &result)
-            guard status == errSecSuccess,
-                  let data = result as? Data,
-                  let value = String(data: data, encoding: .utf8) else {
+            guard let separator = line.firstIndex(of: "=") else {
                 return nil
             }
-            return value
-        }
 
-        private func saveKeychainValue(_ value: String, for key: Key, service: String) throws {
-            let data = Data(value.utf8)
-            let updateQuery = baseQuery(for: key, service: service)
-            let updateAttributes: [CFString: Any] = [
-                kSecValueData: data,
-                kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            ]
-
-            let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary)
-            switch updateStatus {
-            case errSecSuccess:
-                return
-            case errSecItemNotFound:
-                var addQuery = baseQuery(for: key, service: service)
-                addQuery[kSecValueData] = data
-                addQuery[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-                let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-                guard addStatus == errSecSuccess else {
-                    throw error(status: addStatus, operation: "save")
-                }
-            default:
-                throw error(status: updateStatus, operation: "save")
+            let key = line[..<separator].trimmingCharacters(in: .whitespaces)
+            let rawValue = line[line.index(after: separator)...].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else {
+                return nil
             }
+
+            return (String(key), parseValue(String(rawValue)))
         }
 
-        private func deleteKeychainValue(for key: Key, service: String) throws {
-            let status = SecItemDelete(baseQuery(for: key, service: service) as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw error(status: status, operation: "delete")
+        private static func parseValue(_ rawValue: String) -> String {
+            guard rawValue.count >= 2 else {
+                return rawValue
             }
-        }
 
-        private func error(status: OSStatus, operation: String) -> NSError {
-            NSError(
-                domain: "BrowseAPIKeyStore",
-                code: Int(status),
-                userInfo: [NSLocalizedDescriptionKey: "Could not \(operation) API key. Security status: \(status)."]
-            )
+            let first = rawValue.first
+            let last = rawValue.last
+            if (first == "\"" && last == "\"") || (first == "'" && last == "'") {
+                let start = rawValue.index(after: rawValue.startIndex)
+                let end = rawValue.index(before: rawValue.endIndex)
+                return String(rawValue[start..<end])
+            }
+
+            guard let commentStart = rawValue.range(of: " #")?.lowerBound else {
+                return rawValue
+            }
+            return rawValue[..<commentStart].trimmingCharacters(in: .whitespaces)
         }
     }
 
     private static let store = Store()
 
-    enum Key: String {
-        case claudeAPIKey = "claude-api-key"
-        case exaAPIKey = "exa-api-key"
-    }
+    enum Key {
+        case claudeAPIKey
+        case exaAPIKey
 
-    func save(_ value: String, for key: Key) throws {
-        try Self.store.save(value, for: key)
+        var environmentNames: [String] {
+            switch self {
+            case .claudeAPIKey:
+                return ["ANTHROPIC_API_KEY", "BROWSE_CLAUDE_API_KEY", "CLAUDE_API_KEY"]
+            case .exaAPIKey:
+                return ["EXA_API_KEY", "BROWSE_EXA_API_KEY"]
+            }
+        }
     }
 
     func read(_ key: Key) -> String? {
         Self.store.read(key)
     }
+}
 
-    func delete(_ key: Key) throws {
-        try Self.store.delete(key)
+private extension String {
+    var nonEmpty: String? {
+        isEmpty ? nil : self
     }
 }

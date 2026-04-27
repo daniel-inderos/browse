@@ -6,3 +6,6 @@ xcuserdata/
 DerivedData/
 .DS_Store
 .hermes/
+.env
+.env.*
+!.env.example

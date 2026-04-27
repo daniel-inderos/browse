@@ -148,29 +148,37 @@ Xcode is the recommended path for interactive app development because it gives t
 
 ## API Keys
 
-Open Browse settings and enter:
+AI features load API keys from process environment variables or from a local `.env` file. Process environment variables take precedence over `.env` values.
 
-- Claude API key: used for briefing synthesis, briefing follow-ups, and page chat.
-- Exa API key: used for retrieving web sources for briefings.
+Create a local `.env` from the example:
 
-Keys are stored in the current user's macOS Keychain under:
-
-```text
-com.browse.app.api-keys.v2
+```sh
+cp .env.example .env
 ```
 
-The key accounts are:
+Then fill in:
 
 ```text
-claude-api-key
-exa-api-key
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+EXA_API_KEY=your_exa_api_key_here
 ```
 
-`APIKeyStore` also attempts to migrate legacy entries from the older `com.browse.app` service name.
+The keys are used for:
 
-Keychain reads use an `LAContext` with `interactionNotAllowed = true`. This means Browse does not intentionally trigger macOS password prompts while launching, generating briefings, or chatting. If the Keychain requires user interaction, Browse treats the key as unavailable and asks the user to configure it again.
+- `ANTHROPIC_API_KEY`: briefing synthesis, briefing follow-ups, and page chat.
+- `EXA_API_KEY`: web source retrieval for briefings.
 
-Do not commit API keys, signing identities, private account IDs, local usernames, certificates, provisioning profile details, machine-specific paths, or private URLs.
+`APIKeyStore` also accepts these aliases:
+
+```text
+BROWSE_CLAUDE_API_KEY
+CLAUDE_API_KEY
+BROWSE_EXA_API_KEY
+```
+
+The loader searches for `.env` by walking up from the current working directory, executable location, app bundle, and source file location. This supports both `swift run Browse` and Xcode package launches during development.
+
+Settings displays the detected keys and can test connections, but API keys are edited in `.env` or in the launch environment. Do not commit `.env`, API keys, signing identities, private account IDs, local usernames, certificates, provisioning profile details, machine-specific paths, or private URLs.
 
 ## Using Browse
 
@@ -275,7 +283,7 @@ Private windows use:
 - first-party/direct favicon fetching by default, without Google S2 fallback
 - generated briefing image placeholders by default, without preloading source image URLs
 
-API keys still come from the user's Keychain because they are app settings, not browsing history.
+API keys still come from `.env` or the launch environment because they are app configuration, not browsing history.
 
 ## Keyboard Shortcuts
 
@@ -331,7 +339,7 @@ Tab number shortcuts follow the sidebar's visual grouping order:
 Browse follows a small SwiftUI application architecture:
 
 - Models define serializable browser, briefing, source, tab, and conversation data.
-- Services handle API calls, persistence, classification, Keychain storage, favicons, autocomplete, and prompt construction.
+- Services handle API calls, persistence, classification, environment-backed API key loading, favicons, autocomplete, and prompt construction.
 - View models coordinate user actions, application state, streaming, page extraction, tab management, and persistence.
 - Views render the browser window, intent bar, tab sidebar, web content, briefings, chat, settings, and shared UI.
 
@@ -390,7 +398,7 @@ The main scene is a `WindowGroup` keyed by `BrowserWindowConfiguration`. A separ
 
 | File | Purpose |
 | --- | --- |
-| `Services/APIKeyStore.swift` | Keychain storage, legacy key migration, non-interactive reads, and key caching. |
+| `Services/APIKeyStore.swift` | `.env` and process-environment API key loading. |
 | `Services/AccentColorManager.swift` | UserDefaults-backed accent color settings. |
 | `Services/IntentClassifier.swift` | Rule-based intent classification for URLs, domains, questions, and searches. |
 | `Services/SearchAutocompleteService.swift` | Google suggestion request construction and response parsing. |
@@ -446,7 +454,7 @@ Browse treats the repository as suitable for public/open-source development. Run
 
 | Data | Storage |
 | --- | --- |
-| Claude and Exa API keys | macOS Keychain, service `com.browse.app.api-keys.v2` |
+| Claude and Exa API keys | Local `.env` file or process environment variables |
 | Accent color | UserDefaults key `accentColorHex` |
 | Google autocomplete preference | UserDefaults key `remoteGoogleSearchAutocompleteEnabled` |
 | Private Google S2 favicon preference | UserDefaults key `privacy.privateGoogleS2FaviconFallbackEnabled` |
@@ -483,7 +491,7 @@ Settings includes controls to clear normal browsing data, clear AI history, and 
 
 ### Private Browsing Behavior
 
-Private windows do not persist browser state, recently closed tabs, page chats, or WebKit website data. They keep local intent-bar suggestions, but remote Google autocomplete is disabled by default. They still use configured API keys from Keychain when the user invokes AI features.
+Private windows do not persist browser state, recently closed tabs, page chats, or WebKit website data. They keep local intent-bar suggestions, but remote Google autocomplete is disabled by default. They still use configured API keys from `.env` or the launch environment when the user invokes AI features.
 
 By default, private windows avoid optional third-party visual lookups. Favicons are fetched directly from likely favicon URLs or from the visited site's `/favicon.ico`; Browse does not send page domains to Google's S2 favicon endpoint unless "Use Google favicon service in private windows" is enabled in Settings. Briefing source image cards render generated placeholders by default in private windows; enabling "Load briefing images in private windows" lets those remote source image URLs load as the briefing page appears.
 
@@ -498,7 +506,7 @@ Do not commit:
 - private URLs
 - generated build products
 
-The `.gitignore` excludes common local SwiftPM, Xcode, DerivedData, `.DS_Store`, and generated workspace files.
+The `.gitignore` excludes `.env`, common local SwiftPM, Xcode, DerivedData, `.DS_Store`, and generated workspace files.
 
 ## Networking
 
@@ -650,7 +658,7 @@ Diagnostics must not include raw user queries, page content, generated AI output
 
 ### Briefings or Chat Say an API Key Is Missing
 
-Open Settings and enter the relevant key. Use Test Connection to verify it. If a key exists in Keychain but macOS requires interaction to access it, Browse treats it as unavailable because non-interactive reads are intentional.
+Copy `.env.example` to `.env`, fill in `ANTHROPIC_API_KEY` and `EXA_API_KEY`, then restart the app. Settings shows the detected values and provides Test Connection buttons.
 
 ### Briefing Search Fails
 

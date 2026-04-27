@@ -11,7 +11,7 @@ enum ClaudeAPIError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noAPIKey: "Claude API key not configured. Open Settings to add it."
+        case .noAPIKey: "Claude API key not configured. Add ANTHROPIC_API_KEY to .env."
         case .httpError(let code, _): "HTTP \(code)"
         case .decodingError: "Decoding error"
         case .networkError: "Network error"

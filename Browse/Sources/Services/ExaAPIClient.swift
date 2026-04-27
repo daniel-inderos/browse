@@ -8,7 +8,7 @@ enum ExaAPIError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noAPIKey: "Exa API key not configured. Open Settings to add it."
+        case .noAPIKey: "Exa API key not configured. Add EXA_API_KEY to .env."
         case .httpError(let code, _): "HTTP \(code)"
         case .decodingError: "Decoding error"
         case .networkError: "Network error"

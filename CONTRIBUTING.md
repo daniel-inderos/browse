@@ -40,7 +40,7 @@ You can also launch from the command line:
 swift run Browse
 ```
 
-AI briefings and page chat require user-provided Anthropic Claude and Exa API keys configured in the app settings. Tests should not require live API keys or live network calls.
+AI briefings and page chat require user-provided Anthropic Claude and Exa API keys configured through `.env` or process environment variables. Copy `.env.example` to `.env` for local development. Tests should not require live API keys or live network calls.
 
 ## Workflow
 

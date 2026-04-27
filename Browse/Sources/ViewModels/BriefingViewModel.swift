@@ -308,7 +308,7 @@ final class BriefingViewModel {
     private static func userFacingErrorMessage(_ error: Error, operation: String) -> String {
         switch error {
         case ClaudeAPIError.noAPIKey, ExaAPIError.noAPIKey:
-            return "\(operation) failed: API key not configured. Open Settings to add it."
+            return "\(operation) failed: API key not configured. Add it to .env."
         case ClaudeAPIError.httpError(let statusCode, _), ExaAPIError.httpError(let statusCode, _):
             return "\(operation) failed: provider returned HTTP \(statusCode)."
         case ClaudeAPIError.decodingError, ExaAPIError.decodingError:

@@ -11,6 +11,7 @@ final class SettingsViewModel {
     var exaTestStatus: TestStatus = .idle
     var clearBrowsingDataStatus: ActionStatus = .idle
     var clearAIHistoryStatus: ActionStatus = .idle
+    let apiKeyConfigurationSource = ".env or process environment"
 
     enum TestStatus: Equatable {
         case idle
@@ -39,12 +40,10 @@ final class SettingsViewModel {
 
     func setClaudeAPIKey(_ value: String) {
         claudeAPIKey = value
-        saveClaudeKey()
     }
 
     func setExaAPIKey(_ value: String) {
         exaAPIKey = value
-        saveExaKey()
     }
 
     func setRemoteGoogleSuggestionsEnabled(_ value: Bool) {
@@ -75,16 +74,6 @@ final class SettingsViewModel {
         } catch {
             clearAIHistoryStatus = .failure(error.localizedDescription)
         }
-    }
-
-    func saveClaudeKey() {
-        guard !claudeAPIKey.isEmpty else { return }
-        try? apiKeyStore.save(claudeAPIKey, for: .claudeAPIKey)
-    }
-
-    func saveExaKey() {
-        guard !exaAPIKey.isEmpty else { return }
-        try? apiKeyStore.save(exaAPIKey, for: .exaAPIKey)
     }
 
     private func clearDefaultWebsiteData() async {
