@@ -76,11 +76,9 @@ struct TabBarView: View {
                             }
                         }
                         .padding(.top, 4)
-                        .padding(.bottom, hasStandardTabs ? 8 : 0)
+                        .padding(.bottom, 8)
 
-                        if hasStandardTabs {
-                            sectionDivider
-                        }
+                        sectionDivider
                     }
 
                     // --- Pinned Section ---
