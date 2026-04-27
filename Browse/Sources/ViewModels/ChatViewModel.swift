@@ -9,6 +9,7 @@ final class ChatViewModel {
     var isStreaming: Bool = false
     var errorMessage: String?
     var onConversationHistoryChange: (([ConversationMessage]) -> Void)?
+    private(set) var isPageContextIncluded: Bool = true
 
     private(set) var pageURL: URL?
     private(set) var pageTitle: String = ""
@@ -18,6 +19,17 @@ final class ChatViewModel {
 
     var isStreamingAnswer: Bool {
         isStreaming && !conversationHistory.isEmpty && conversationHistory.last?.role == .user
+    }
+
+    var pageContextLabel: String? {
+        guard isPageContextIncluded else { return nil }
+
+        let trimmedTitle = pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty {
+            return trimmedTitle
+        }
+
+        return pageURL?.displayHost
     }
 
     init(claudeClient: ClaudeAPIClient) {
@@ -30,12 +42,17 @@ final class ChatViewModel {
         pageURL = url
         pageTitle = title
         pageContent = nil
+        isPageContextIncluded = true
     }
 
     func updatePageContext(from webVM: WebTabViewModel) async {
         pageURL = webVM.currentURL
         pageTitle = webVM.pageTitle
         pageContent = await webVM.extractPageContent()
+    }
+
+    func removePageContextFromModel() {
+        isPageContextIncluded = false
     }
 
     func resetForNewPage() {
@@ -47,6 +64,7 @@ final class ChatViewModel {
         pageURL = nil
         pageTitle = ""
         pageContent = nil
+        isPageContextIncluded = true
         onConversationHistoryChange?(conversationHistory)
     }
 
@@ -132,33 +150,49 @@ final class ChatViewModel {
 
     // MARK: - System Prompt
 
-    private func buildSystemPrompt() -> String {
+    func buildSystemPrompt() -> String {
         var prompt = """
-        You are Browse, an AI assistant embedded in a native web browser. \
-        The user is currently viewing a web page and wants to discuss it with you.
+        You are Browse, an AI assistant embedded in a native web browser.
 
         """
 
-        if let url = pageURL {
-            prompt += "Current page URL: \(url.absoluteString)\n"
-        }
-        if !pageTitle.isEmpty {
-            prompt += "Page title: \(pageTitle)\n"
-        }
-        if let content = pageContent, !content.isEmpty {
-            prompt += "\nPage content (truncated):\n\(content)\n"
+        if isPageContextIncluded {
+            prompt += "The user is currently viewing a web page and wants to discuss it with you.\n\n"
+
+            if let url = pageURL {
+                prompt += "Current page URL: \(url.absoluteString)\n"
+            }
+            if !pageTitle.isEmpty {
+                prompt += "Page title: \(pageTitle)\n"
+            }
+            if let content = pageContent, !content.isEmpty {
+                prompt += "\nPage content (truncated):\n\(content)\n"
+            }
+        } else {
+            prompt += "No current page context is attached to this chat request.\n"
         }
 
-        prompt += """
+        if isPageContextIncluded {
+            prompt += """
 
-        RULES:
-        - Answer questions about the page content directly and helpfully
-        - Be conversational but precise
-        - When referencing specific parts of the page, be specific
-        - Use markdown formatting for clarity (bold, bullets, code blocks)
-        - If the user asks about something not on the page, say so honestly
-        - Keep responses focused and concise unless the user asks for detail
-        """
+            RULES:
+            - Answer questions about the page content directly and helpfully
+            - Be conversational but precise
+            - When referencing specific parts of the page, be specific
+            - Use markdown formatting for clarity (bold, bullets, code blocks)
+            - If the user asks about something not on the page, say so honestly
+            - Keep responses focused and concise unless the user asks for detail
+            """
+        } else {
+            prompt += """
+
+            RULES:
+            - Be conversational but precise
+            - Use markdown formatting for clarity (bold, bullets, code blocks)
+            - Do not infer details from the current browser page because it was not provided
+            - Keep responses focused and concise unless the user asks for detail
+            """
+        }
 
         return prompt
     }

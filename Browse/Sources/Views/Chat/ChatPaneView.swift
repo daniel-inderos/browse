@@ -10,6 +10,7 @@ struct ChatPaneView: View {
     @State private var sidebarWidth: CGFloat
     @State private var resizeStartWidth: CGFloat?
     @State private var isClearConfirmationPresented: Bool = false
+    @State private var isContextChipHovered: Bool = false
     @FocusState private var isInputFocused: Bool
 
     private let minWidth: CGFloat = 300
@@ -250,26 +251,33 @@ struct ChatPaneView: View {
     // MARK: - Input Bar
 
     private var chatInputBar: some View {
-        HStack(spacing: 8) {
-            TextField("Ask\u{2026}", text: $viewModel.inputText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, weight: .regular))
-                .focused($isInputFocused)
-                .onSubmit { submitMessage() }
-
-            if !viewModel.inputText.isEmpty {
-                Button(action: submitMessage) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 24, height: 24)
-                        .background(BrowseColor.accent, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
+        VStack(alignment: .leading, spacing: 8) {
+            if let contextLabel = viewModel.pageContextLabel {
+                pageContextChip(contextLabel)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
+
+            HStack(spacing: 8) {
+                TextField("Ask\u{2026}", text: $viewModel.inputText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .regular))
+                    .focused($isInputFocused)
+                    .onSubmit { submitMessage() }
+
+                if !viewModel.inputText.isEmpty {
+                    Button(action: submitMessage) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 24, height: 24)
+                            .background(BrowseColor.accent, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
+            .disabled(viewModel.isStreaming)
         }
-        .disabled(viewModel.isStreaming)
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .overlay(alignment: .top) {
@@ -277,6 +285,47 @@ struct ChatPaneView: View {
                 .fill(BrowseColor.borderSubtle)
                 .frame(height: 0.5)
         }
+    }
+
+    private func pageContextChip(_ label: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(BrowseColor.accent)
+
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Button(action: viewModel.removePageContextFromModel) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .opacity(isContextChipHovered ? 1 : 0)
+            .allowsHitTesting(isContextChipHovered)
+            .accessibilityLabel("Remove page context")
+            .help("Remove current page from model context")
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+        .background(BrowseColor.surfaceSubtle, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(BrowseColor.borderSubtle, lineWidth: 0.5)
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                isContextChipHovered = hovering
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isContextChipHovered)
     }
 
     private func submitMessage() {
