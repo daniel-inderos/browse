@@ -191,6 +191,11 @@ struct BrowserViewModelTests {
         originalWebVM.restoreNavigationHistory([previousURL, url], currentIndex: 1)
 
         viewModel.closeTab(tab.id)
+
+        #expect(tab.webTabViewModel == nil)
+        #expect(originalWebVM.currentURL == nil)
+        #expect(!originalWebVM.isLoading)
+
         viewModel.reopenLastClosedTab()
 
         let reopenedTab = try #require(viewModel.activeTab)

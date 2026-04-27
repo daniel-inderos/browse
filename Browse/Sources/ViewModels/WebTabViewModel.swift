@@ -367,6 +367,18 @@ final class WebTabViewModel: NSObject {
     })();
     """
 
+    private static let stopMediaJS = """
+    (function() {
+        document.querySelectorAll('audio, video').forEach(function(element) {
+            try {
+                element.pause();
+                element.removeAttribute('src');
+                element.load();
+            } catch (_) {}
+        });
+    })();
+    """
+
     /// Extracts the main text content of the current page via JS evaluation.
     /// Returns up to `maxLength` characters of `document.body.innerText`.
     func extractPageContent(maxLength: Int = 12_000) async -> String? {
@@ -420,6 +432,34 @@ final class WebTabViewModel: NSObject {
     func reload() { webView.reload() }
     func reloadFromOrigin() { webView.reloadFromOrigin() }
     func stopLoading() { webView.stopLoading() }
+
+    func closePage() {
+        onStateChange = nil
+        onScrollPositionChange = nil
+        onOpenURLInNewTab = nil
+        observations.removeAll()
+
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        (webView as? BrowserWebView)?.onOpenContextLinkInNewTab = nil
+
+        let userContentController = webView.configuration.userContentController
+        userContentController.removeScriptMessageHandler(forName: "scrollObserver")
+        userContentController.removeScriptMessageHandler(forName: "contextLinkObserver")
+        userContentController.removeScriptMessageHandler(forName: "newTabLinkObserver")
+
+        webView.evaluateJavaScript(Self.stopMediaJS, completionHandler: nil)
+        webView.stopLoading()
+        webView.loadHTMLString("", baseURL: nil)
+
+        currentURL = nil
+        pageTitle = "New Tab"
+        isLoading = false
+        canGoBack = false
+        canGoForward = false
+        estimatedProgress = 0
+        faviconURL = nil
+    }
 
     func restoreNavigationHistory(_ urls: [URL], currentIndex: Int?) {
         navigationHistory = urls

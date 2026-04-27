@@ -1149,7 +1149,7 @@ final class BrowserViewModel {
     private func discardLiveWebView(for tab: Tab) {
         guard tab.kind == .web, let webVM = tab.webTabViewModel else { return }
         syncWebTabState(tab, from: webVM)
-        webVM.stopLoading()
+        webVM.closePage()
         tab.isLoading = false
         tab.webTabViewModel = nil
     }
