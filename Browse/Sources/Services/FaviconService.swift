@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 struct FaviconFetchRequest: Equatable {
@@ -14,22 +13,22 @@ enum FaviconFetchPolicy {
 actor FaviconService {
     static let shared = FaviconService()
 
-    private var cache: [String: NSImage] = [:]
-    private var inFlight: [String: Task<NSImage?, Never>] = [:]
+    private var cache: [String: Data] = [:]
+    private var inFlight: [String: Task<Data?, Never>] = [:]
     private let privateSession = URLSession(configuration: .ephemeral)
 
-    func favicon(
+    func faviconData(
         for url: URL,
         isPrivateBrowsing: Bool = false,
         allowsGoogleS2Fallback: Bool = true
-    ) async -> NSImage? {
+    ) async -> Data? {
         let policy: FaviconFetchPolicy = isPrivateBrowsing && !allowsGoogleS2Fallback
             ? .firstPartyOnly
             : .standard
         guard let request = Self.fetchRequest(for: url, policy: policy) else { return nil }
 
         if isPrivateBrowsing {
-            return await fetchFavicon(request, session: privateSession)
+            return await fetchFaviconData(request, session: privateSession)
         }
 
         if let cached = cache[request.cacheKey] {
@@ -40,16 +39,15 @@ actor FaviconService {
             return await existing.value
         }
 
-        let task = Task<NSImage?, Never> {
-            if let image = await self.fetchFavicon(request, session: .shared) {
-                cache[request.cacheKey] = image
-                return image
-            }
-            return nil
+        let task = Task<Data?, Never> {
+            await self.fetchFaviconData(request, session: .shared)
         }
 
         inFlight[request.cacheKey] = task
         let result = await task.value
+        if let result {
+            cache[request.cacheKey] = result
+        }
         inFlight[request.cacheKey] = nil
         return result
     }
@@ -174,7 +172,7 @@ actor FaviconService {
         return imageExtensions.contains(url.pathExtension.lowercased())
     }
 
-    private func fetchFavicon(_ faviconRequest: FaviconFetchRequest, session: URLSession) async -> NSImage? {
+    private func fetchFaviconData(_ faviconRequest: FaviconFetchRequest, session: URLSession) async -> Data? {
         var request = URLRequest(url: faviconRequest.url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
@@ -184,7 +182,7 @@ actor FaviconService {
                   httpResponse.statusCode == 200 else {
                 return nil
             }
-            return NSImage(data: data)
+            return data
         } catch {
             return nil
         }

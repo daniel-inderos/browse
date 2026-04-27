@@ -54,11 +54,12 @@ struct FaviconView: View {
             guard let url else { return }
             image = nil
             didLoad = false
-            image = await FaviconService.shared.favicon(
+            let faviconData = await FaviconService.shared.faviconData(
                 for: url,
                 isPrivateBrowsing: browserVM.isPrivateBrowsing,
                 allowsGoogleS2Fallback: allowsGoogleS2Fallback
             )
+            image = faviconData.flatMap(NSImage.init(data:))
             didLoad = image != nil
         }
     }
