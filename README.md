@@ -16,6 +16,7 @@ The app is organized as a Swift Package executable target named `Browse`. It cur
 - [Data, Privacy, and Persistence](#data-privacy-and-persistence)
 - [Networking](#networking)
 - [Testing](#testing)
+- [Community](#community)
 - [Project Layout](#project-layout)
 - [Development Notes](#development-notes)
 - [Troubleshooting](#troubleshooting)
@@ -542,6 +543,13 @@ Current tests cover:
 - briefing citation resolution.
 
 The existing tests do not perform live Claude, Exa, WebKit page-load, or UI automation calls.
+
+## Community
+
+- License: Browse is released under the [MIT License](LICENSE).
+- Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, tests, and agent-assisted contribution guidance.
+- Security: please report vulnerabilities privately using the process in [SECURITY.md](SECURITY.md).
+- Conduct: community participation follows [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Project Layout
 
