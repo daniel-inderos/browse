@@ -63,6 +63,21 @@ final class BrowserViewModel {
         !recentlyClosedTabs.isEmpty
     }
 
+    var chatTabMentionCandidates: [ChatTabMentionCandidate] {
+        tabs.compactMap { tab in
+            let url = tab.webTabViewModel?.currentURL ?? tab.url
+            guard tab.kind == .briefing || url != nil else { return nil }
+
+            return ChatTabMentionCandidate(
+                id: tab.id,
+                title: chatMentionTitle(for: tab, fallbackURL: url),
+                url: url,
+                kind: tab.kind,
+                isActive: tab.id == activeTabID
+            )
+        }
+    }
+
     var shouldShowIntentBar: Bool {
         activeTab?.kind != .briefing && isIntentBarVisible
     }
@@ -375,6 +390,31 @@ final class BrowserViewModel {
         chatViewModel.clearConversation()
     }
 
+    func attachTabMentionToChat(_ candidate: ChatTabMentionCandidate) async {
+        guard let chatViewModel,
+              let tab = tabs.first(where: { $0.id == candidate.id }) else { return }
+
+        let url = tab.webTabViewModel?.currentURL ?? tab.url ?? candidate.url
+        let title = chatMentionTitle(for: tab, fallbackURL: url)
+        let content: String?
+
+        switch tab.kind {
+        case .web:
+            content = await tab.webTabViewModel?.extractPageContent(maxLength: 8_000)
+        case .briefing:
+            content = tab.briefingViewModel?.document.streamedMarkdown
+        }
+
+        chatViewModel.addMentionedTabContext(
+            ChatMentionedTabContext(
+                id: tab.id,
+                title: title,
+                url: url,
+                content: content
+            )
+        )
+    }
+
     func setChatPaneGeometry(offset: CGSize, width: CGFloat, height: CGFloat) {
         let clampedWidth = clamp(width, min: minChatPaneWidth, max: maxChatPaneWidth)
         let clampedHeight = clamp(height, min: minChatPaneHeight, max: maxChatPaneHeight)
@@ -536,6 +576,27 @@ final class BrowserViewModel {
 
         guard let webVM = tab.webTabViewModel else { return true }
         return webVM.currentURL == nil
+    }
+
+    private func chatMentionTitle(for tab: Tab, fallbackURL: URL?) -> String {
+        if tab.kind == .briefing,
+           let query = tab.briefingViewModel?.document.query,
+           !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return query
+        }
+
+        if let pageTitle = tab.webTabViewModel?.pageTitle,
+           !pageTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           pageTitle != "New Tab" {
+            return pageTitle
+        }
+
+        if !tab.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           tab.title != "New Tab" {
+            return tab.title
+        }
+
+        return fallbackURL?.displayHost ?? "Untitled Tab"
     }
 
     // MARK: - Source Navigation

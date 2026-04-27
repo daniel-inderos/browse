@@ -10,6 +10,7 @@ final class ChatViewModel {
     var errorMessage: String?
     var onConversationHistoryChange: (([ConversationMessage]) -> Void)?
     private(set) var isPageContextIncluded: Bool = true
+    private(set) var mentionedTabContexts: [ChatMentionedTabContext] = []
 
     private(set) var pageURL: URL?
     private(set) var pageTitle: String = ""
@@ -55,6 +56,18 @@ final class ChatViewModel {
         isPageContextIncluded = false
     }
 
+    func addMentionedTabContext(_ context: ChatMentionedTabContext) {
+        if let index = mentionedTabContexts.firstIndex(where: { $0.id == context.id }) {
+            mentionedTabContexts[index] = context
+        } else {
+            mentionedTabContexts.append(context)
+        }
+    }
+
+    func removeMentionedTabContext(id: UUID) {
+        mentionedTabContexts.removeAll { $0.id == id }
+    }
+
     func resetForNewPage() {
         conversationHistory = []
         streamingResponse = ""
@@ -65,6 +78,7 @@ final class ChatViewModel {
         pageTitle = ""
         pageContent = nil
         isPageContextIncluded = true
+        mentionedTabContexts = []
         onConversationHistoryChange?(conversationHistory)
     }
 
@@ -172,15 +186,28 @@ final class ChatViewModel {
             prompt += "No current page context is attached to this chat request.\n"
         }
 
-        if isPageContextIncluded {
+        if !mentionedTabContexts.isEmpty {
+            prompt += "\nMentioned tab contexts:\n"
+            for context in mentionedTabContexts {
+                prompt += "- Tab title: \(context.label)\n"
+                if let url = context.url {
+                    prompt += "  URL: \(url.absoluteString)\n"
+                }
+                if let content = context.content, !content.isEmpty {
+                    prompt += "  Content (truncated):\n\(content)\n"
+                }
+            }
+        }
+
+        if isPageContextIncluded || !mentionedTabContexts.isEmpty {
             prompt += """
 
             RULES:
-            - Answer questions about the page content directly and helpfully
+            - Answer questions about attached browser context directly and helpfully
             - Be conversational but precise
-            - When referencing specific parts of the page, be specific
+            - When referencing specific parts of a page or tab, be specific
             - Use markdown formatting for clarity (bold, bullets, code blocks)
-            - If the user asks about something not on the page, say so honestly
+            - If the user asks about something not in the attached context, say so honestly
             - Keep responses focused and concise unless the user asks for detail
             """
         } else {

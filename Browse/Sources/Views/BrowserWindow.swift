@@ -319,7 +319,11 @@ struct BrowserWindow: View {
                        let chatVM = browserVM.chatViewModel {
                         ChatPaneView(
                             viewModel: chatVM,
+                            tabMentionCandidates: browserVM.chatTabMentionCandidates,
                             initialWidth: browserVM.chatPaneWidth,
+                            onAttachTabMention: { candidate in
+                                await browserVM.attachTabMentionToChat(candidate)
+                            },
                             onWidthCommit: { width in
                                 browserVM.setChatPaneWidth(width)
                             },
