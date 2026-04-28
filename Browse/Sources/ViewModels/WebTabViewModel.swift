@@ -55,6 +55,7 @@ private final class NewTabLinkMessageHandler: NSObject, WKScriptMessageHandler {
 private final class BrowserWebView: WKWebView {
     var contextMenuLinkURL: URL?
     var onOpenContextLinkInNewTab: ((URL) -> Void)?
+    var onDownloadContextLink: ((URL) -> Void)?
     private var isObservingLinkMenus = false
 
     deinit {
@@ -95,6 +96,7 @@ private final class BrowserWebView: WKWebView {
             existingItem.target = self
             existingItem.action = #selector(openContextLinkInNewTab(_:))
             existingItem.representedObject = url
+            addDownloadLinkedFileItemIfNeeded(to: menu, url: url)
             return
         }
 
@@ -113,6 +115,31 @@ private final class BrowserWebView: WKWebView {
         } else {
             menu.insertItem(item, at: 0)
         }
+
+        addDownloadLinkedFileItemIfNeeded(to: menu, url: url)
+    }
+
+    private func addDownloadLinkedFileItemIfNeeded(to menu: NSMenu, url: URL) {
+        if let existingItem = menu.items.first(where: { $0.title == "Download Linked File" }) {
+            existingItem.target = self
+            existingItem.action = #selector(downloadContextLink(_:))
+            existingItem.representedObject = url
+            return
+        }
+
+        let item = NSMenuItem(
+            title: "Download Linked File",
+            action: #selector(downloadContextLink(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = url
+
+        if let openLinkIndex = menu.items.firstIndex(where: { $0.title == "Open Link in New Tab" }) {
+            menu.insertItem(item, at: openLinkIndex + 1)
+        } else {
+            menu.addItem(item)
+        }
     }
 
     private func isLinkMenu(_ menu: NSMenu) -> Bool {
@@ -126,6 +153,11 @@ private final class BrowserWebView: WKWebView {
     @objc private func openContextLinkInNewTab(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         onOpenContextLinkInNewTab?(url)
+    }
+
+    @objc private func downloadContextLink(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        onDownloadContextLink?(url)
     }
 }
 
@@ -148,6 +180,7 @@ final class WebTabViewModel: NSObject {
     var navigationHistorySnapshotIndex: Int? { navigationHistoryIndex }
 
     private(set) var webView: WKWebView
+    private let downloadManager: DownloadManager
     private var observations: [NSKeyValueObservation] = []
     private(set) var scrollOffsetY: CGFloat = 0
     private var navigationHistory: [URL] = []
@@ -160,7 +193,10 @@ final class WebTabViewModel: NSObject {
     private var contextLinkHandler: ContextLinkMessageHandler?
     private var newTabLinkHandler: NewTabLinkMessageHandler?
 
-    init(websiteDataStore: WKWebsiteDataStore = .default()) {
+    init(
+        websiteDataStore: WKWebsiteDataStore = .default(),
+        downloadManager: DownloadManager = .shared
+    ) {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = websiteDataStore
         config.preferences.isElementFullscreenEnabled = true
@@ -192,6 +228,7 @@ final class WebTabViewModel: NSObject {
         config.userContentController.addUserScript(newTabLinkScript)
 
         self.webView = BrowserWebView(frame: .zero, configuration: config)
+        self.downloadManager = downloadManager
         super.init()
 
         // Wire up the message handler *after* super.init so we can
@@ -215,6 +252,11 @@ final class WebTabViewModel: NSObject {
         webView.configuration.userContentController.add(contextLinkHandler, name: "contextLinkObserver")
         (webView as? BrowserWebView)?.onOpenContextLinkInNewTab = { [weak self] url in
             self?.openInNewTab(url, activates: false)
+        }
+        (webView as? BrowserWebView)?.onDownloadContextLink = { [weak self] url in
+            Task { @MainActor [weak self] in
+                self?.downloadLinkedFile(url)
+            }
         }
         (webView as? BrowserWebView)?.observeLinkMenus()
 
@@ -442,6 +484,7 @@ final class WebTabViewModel: NSObject {
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         (webView as? BrowserWebView)?.onOpenContextLinkInNewTab = nil
+        (webView as? BrowserWebView)?.onDownloadContextLink = nil
 
         let userContentController = webView.configuration.userContentController
         userContentController.removeScriptMessageHandler(forName: "scrollObserver")
@@ -508,6 +551,13 @@ final class WebTabViewModel: NSObject {
 
     private func openInNewTab(_ url: URL, activates: Bool = true) {
         onOpenURLInNewTab?(url, activates)
+    }
+
+    private func downloadLinkedFile(_ url: URL) {
+        webView.startDownload(using: URLRequest(url: url)) { [weak self] download in
+            guard let self else { return }
+            self.downloadManager.begin(download, sourceURL: url)
+        }
     }
 
     // MARK: - Navigation history
@@ -697,6 +747,10 @@ extension WebTabViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         guard let url = navigationAction.request.url else { return .allow }
 
+        if navigationAction.shouldPerformDownload {
+            return .download
+        }
+
         let isLinkActivation = navigationAction.navigationType == .linkActivated
         let opensNewWindow = navigationAction.targetFrame == nil
         let isCommandClick = isLinkActivation && navigationAction.modifierFlags.contains(.command)
@@ -706,6 +760,26 @@ extension WebTabViewModel: WKNavigationDelegate {
 
         openInNewTab(url, activates: !(isCommandClick || isMiddleClick))
         return .cancel
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        navigationResponse.canShowMIMEType ? .allow : .download
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationAction: WKNavigationAction,
+        didBecome download: WKDownload
+    ) {
+        downloadManager.begin(download, sourceURL: navigationAction.request.url)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        navigationResponse: WKNavigationResponse,
+        didBecome download: WKDownload
+    ) {
+        downloadManager.begin(download, sourceURL: navigationResponse.response.url)
     }
 }
 

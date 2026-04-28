@@ -43,7 +43,9 @@ final class BrowserViewModel {
     var chatPaneHeight: CGFloat = 480
     var chatViewModel: ChatViewModel?
     var isCurrentURLCopyIndicatorVisible: Bool = false
+    var isDownloadsPanelVisible: Bool = false
     let isPrivateBrowsing: Bool
+    let downloadManager: DownloadManager
 
     private let windowID: UUID
     private let apiKeyStore = APIKeyStore()
@@ -115,6 +117,18 @@ final class BrowserViewModel {
         }
     }
 
+    func toggleDownloadsPanel() {
+        let willShowDownloadsPanel = !isDownloadsPanelVisible
+        isDownloadsPanelVisible = willShowDownloadsPanel
+        if willShowDownloadsPanel {
+            isTabBarVisible = true
+        }
+    }
+
+    func hideDownloadsPanel() {
+        isDownloadsPanelVisible = false
+    }
+
     var chatTabMentionCandidates: [ChatTabMentionCandidate] {
         tabs.compactMap { tab in
             let url = tab.webTabViewModel?.currentURL ?? tab.url
@@ -138,11 +152,13 @@ final class BrowserViewModel {
         windowID: UUID = UUID(),
         isPrivateBrowsing: Bool = false,
         restoresPersistedState: Bool = true,
-        persistenceStore: BrowserPersistenceStore = BrowserPersistenceStore()
+        persistenceStore: BrowserPersistenceStore = BrowserPersistenceStore(),
+        downloadManager: DownloadManager = .shared
     ) {
         self.windowID = windowID
         self.isPrivateBrowsing = isPrivateBrowsing
         self.persistenceStore = persistenceStore
+        self.downloadManager = downloadManager
         self.allowsStatePersistence = !isPrivateBrowsing
         self.websiteDataStore = isPrivateBrowsing ? .nonPersistent() : .default()
 
@@ -707,7 +723,10 @@ final class BrowserViewModel {
     private func openURL(_ url: URL) {
         if let activeTab, activeTab.kind == .web {
             if activeTab.webTabViewModel == nil {
-                let vm = WebTabViewModel(websiteDataStore: websiteDataStore)
+                let vm = WebTabViewModel(
+                    websiteDataStore: websiteDataStore,
+                    downloadManager: downloadManager
+                )
                 activeTab.webTabViewModel = vm
                 wireWebTabState(for: activeTab, webVM: vm)
             }
@@ -868,7 +887,10 @@ final class BrowserViewModel {
             )
 
             if tab.kind == .web {
-                let webVM = WebTabViewModel(websiteDataStore: websiteDataStore)
+                let webVM = WebTabViewModel(
+                    websiteDataStore: websiteDataStore,
+                    downloadManager: downloadManager
+                )
                 tab.webTabViewModel = webVM
                 let history = restoredNavigationHistory(from: snapshot)
                 let historyIndex = restoredNavigationHistoryIndex(from: snapshot, history: history)
@@ -1128,7 +1150,10 @@ final class BrowserViewModel {
             createdAt: createdAt,
             lastAccessedAt: lastAccessedAt
         )
-        let webVM = WebTabViewModel(websiteDataStore: websiteDataStore)
+        let webVM = WebTabViewModel(
+            websiteDataStore: websiteDataStore,
+            downloadManager: downloadManager
+        )
         tab.webTabViewModel = webVM
         wireWebTabState(for: tab, webVM: webVM)
         return tab
@@ -1141,7 +1166,10 @@ final class BrowserViewModel {
             return webVM
         }
 
-        let webVM = WebTabViewModel(websiteDataStore: websiteDataStore)
+        let webVM = WebTabViewModel(
+            websiteDataStore: websiteDataStore,
+            downloadManager: downloadManager
+        )
         tab.webTabViewModel = webVM
         wireWebTabState(for: tab, webVM: webVM)
         return webVM

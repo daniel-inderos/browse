@@ -284,6 +284,13 @@ private struct BrowserCommands: Commands {
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .disabled(browserViewModel?.activeTabURL == nil)
 
+            Button("Downloads") {
+                NSApp.activate(ignoringOtherApps: true)
+                browserViewModel?.toggleDownloadsPanel()
+            }
+            .keyboardShortcut("l", modifiers: [.command, .option])
+            .disabled(browserViewModel == nil)
+
             Button(browserViewModel?.isChatPaneVisible == true ? "Hide Chat" : "Chat with Page") {
                 browserViewModel?.toggleChatPane()
             }

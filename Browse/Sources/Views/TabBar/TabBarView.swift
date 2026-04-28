@@ -153,6 +153,51 @@ struct TabBarView: View {
                 }
                 .buttonStyle(.plain)
 
+                Button(action: { browserVM.toggleDownloadsPanel() }) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(
+                                browserVM.isDownloadsPanelVisible
+                                    ? BrowseColor.accent
+                                    : Color.secondary
+                            )
+                            .frame(width: 34, height: 32)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(Color.primary.opacity(0.04))
+                            )
+                            .contentShape(Rectangle())
+
+                        if browserVM.downloadManager.activeCount > 0 {
+                            Circle()
+                                .fill(BrowseColor.accent)
+                                .frame(width: 7, height: 7)
+                                .offset(x: -7, y: 7)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Downloads")
+                .popover(
+                    isPresented: Binding(
+                        get: { browserVM.isDownloadsPanelVisible },
+                        set: { isPresented in
+                            if isPresented {
+                                browserVM.isDownloadsPanelVisible = true
+                            } else {
+                                browserVM.hideDownloadsPanel()
+                            }
+                        }
+                    ),
+                    arrowEdge: .trailing
+                ) {
+                    DownloadsPanelView(
+                        manager: browserVM.downloadManager,
+                        onClose: { browserVM.hideDownloadsPanel() }
+                    )
+                }
+
                 Button(action: { browserVM.createTabGroup() }) {
                     Image(systemName: "folder.badge.plus")
                         .font(.system(size: 12, weight: .semibold))
