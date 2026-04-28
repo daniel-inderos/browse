@@ -101,6 +101,54 @@ struct DownloadDestinationResolver {
     }
 }
 
+struct PersistedDownloadItem: Codable, Equatable {
+    let id: UUID
+    let filename: String
+    let sourceURL: URL?
+    let destinationURL: URL?
+    let progress: Double
+    let state: DownloadState
+    let errorSummary: String?
+}
+
+struct DownloadHistoryStore {
+    let fileURL: URL
+    let fileManager: FileManager
+
+    init(fileURL: URL, fileManager: FileManager = .default) {
+        self.fileURL = fileURL
+        self.fileManager = fileManager
+    }
+
+    init(fileManager: FileManager = .default) {
+        let supportDirectory = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? fileManager.temporaryDirectory
+        let appDirectory = supportDirectory.appendingPathComponent(
+            Bundle.main.bundleIdentifier ?? "Browse",
+            isDirectory: true
+        )
+        self.init(
+            fileURL: appDirectory.appendingPathComponent("downloads.json", isDirectory: false),
+            fileManager: fileManager
+        )
+    }
+
+    func load() -> [PersistedDownloadItem] {
+        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        return (try? JSONDecoder().decode([PersistedDownloadItem].self, from: data)) ?? []
+    }
+
+    func save(_ items: [PersistedDownloadItem]) throws {
+        let directoryURL = fileURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        let data = try JSONEncoder().encode(items)
+        try data.write(to: fileURL, options: [.atomic])
+    }
+}
+
 @MainActor
 @Observable
 final class DownloadManager: NSObject {
@@ -122,13 +170,21 @@ final class DownloadManager: NSObject {
     private(set) var downloads: [DownloadItem] = []
 
     private let destinationResolver: DownloadDestinationResolver
+    private let historyStore: DownloadHistoryStore
+    private let maxPersistedEntries: Int
     private var activeDownloadsByObjectID: [ObjectIdentifier: ActiveDownload] = [:]
     private var downloadsByItemID: [DownloadItem.ID: WKDownload] = [:]
     private var progressObservationsByItemID: [DownloadItem.ID: NSKeyValueObservation] = [:]
     private var resumeDataByItemID: [DownloadItem.ID: Data] = [:]
     private var sourceWebViewsByItemID: [DownloadItem.ID: WeakWebViewBox] = [:]
 
-    init(downloadsDirectoryURL: URL? = nil, fileManager: FileManager = .default) {
+    init(
+        downloadsDirectoryURL: URL? = nil,
+        fileManager: FileManager = .default,
+        historyStore: DownloadHistoryStore? = nil,
+        loadsSavedDownloads: Bool = true,
+        maxPersistedEntries: Int = 50
+    ) {
         let resolvedDownloadsDirectory = downloadsDirectoryURL
             ?? fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
@@ -136,7 +192,13 @@ final class DownloadManager: NSObject {
             downloadsDirectoryURL: resolvedDownloadsDirectory,
             fileManager: fileManager
         )
+        self.historyStore = historyStore ?? DownloadHistoryStore(fileManager: fileManager)
+        self.maxPersistedEntries = maxPersistedEntries
         super.init()
+
+        if loadsSavedDownloads {
+            self.downloads = Self.restoredDownloadItems(from: self.historyStore.load())
+        }
     }
 
     var activeCount: Int {
@@ -172,6 +234,7 @@ final class DownloadManager: NSObject {
         guard let webView = sourceWebViewsByItemID[item.id]?.webView else {
             item.errorSummary = "The original browser context is no longer available."
             item.isRetryAvailable = false
+            persistRecentDownloads()
             return
         }
 
@@ -180,6 +243,7 @@ final class DownloadManager: NSObject {
         item.errorSummary = nil
         item.destinationURL = nil
         item.isRetryAvailable = false
+        persistRecentDownloads()
 
         if let resumeData = resumeDataByItemID[item.id] {
             resumeDataByItemID[item.id] = nil
@@ -195,6 +259,7 @@ final class DownloadManager: NSObject {
         } else {
             item.state = .failed
             item.errorSummary = "The original download URL is unavailable."
+            persistRecentDownloads()
         }
     }
 
@@ -220,10 +285,65 @@ final class DownloadManager: NSObject {
             resumeDataByItemID[id] = nil
             sourceWebViewsByItemID[id] = nil
         }
+        persistRecentDownloads()
     }
 
     static func entriesAfterClearingCompleted(_ downloads: [DownloadItem]) -> [DownloadItem] {
         downloads.filter { $0.state != .completed }
+    }
+
+    static func persistedDownloadItems(
+        from downloads: [DownloadItem],
+        maxEntries: Int
+    ) -> [PersistedDownloadItem] {
+        Array(
+            downloads
+                .filter { !$0.isActive }
+                .prefix(maxEntries)
+                .map { item in
+                    PersistedDownloadItem(
+                        id: item.id,
+                        filename: item.filename,
+                        sourceURL: persistedSourceURL(from: item.sourceURL),
+                        destinationURL: item.destinationURL,
+                        progress: item.progress,
+                        state: item.state,
+                        errorSummary: item.errorSummary
+                    )
+                }
+        )
+    }
+
+    static func restoredDownloadItems(from persistedItems: [PersistedDownloadItem]) -> [DownloadItem] {
+        persistedItems
+            .filter { $0.state == .completed || $0.state == .failed }
+            .map { persistedItem in
+                DownloadItem(
+                    id: persistedItem.id,
+                    filename: persistedItem.filename,
+                    sourceURL: persistedItem.sourceURL,
+                    destinationURL: persistedItem.destinationURL,
+                    progress: persistedItem.state == .completed ? 1 : persistedItem.progress,
+                    state: persistedItem.state,
+                    errorSummary: persistedItem.errorSummary,
+                    isRetryAvailable: false
+                )
+            }
+    }
+
+    private static func persistedSourceURL(from sourceURL: URL?) -> URL? {
+        guard let sourceURL,
+              let scheme = sourceURL.scheme?.lowercased(),
+              (scheme == "http" || scheme == "https"),
+              let host = sourceURL.host else {
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+        components.port = sourceURL.port
+        return components.url
     }
 
     private func register(_ download: WKDownload, for item: DownloadItem, sourceURL: URL?) {
@@ -260,6 +380,27 @@ final class DownloadManager: NSObject {
         ) else { return }
         downloadsByItemID[activeDownload.itemID] = nil
         progressObservationsByItemID[activeDownload.itemID] = nil
+    }
+
+    private func persistRecentDownloads() {
+        trimInactiveDownloadsIfNeeded()
+        let persistedItems = Self.persistedDownloadItems(
+            from: downloads,
+            maxEntries: maxPersistedEntries
+        )
+        try? historyStore.save(persistedItems)
+    }
+
+    private func trimInactiveDownloadsIfNeeded() {
+        let inactiveIDsToKeep = Set(
+            downloads
+                .filter { !$0.isActive }
+                .prefix(maxPersistedEntries)
+                .map(\.id)
+        )
+        downloads.removeAll { item in
+            !item.isActive && !inactiveIDsToKeep.contains(item.id)
+        }
     }
 
     private func filename(from url: URL?) -> String {
@@ -317,6 +458,7 @@ extension DownloadManager: WKDownloadDelegate {
         item.isRetryAvailable = false
         resumeDataByItemID[item.id] = nil
         cleanupActiveDownload(download)
+        persistRecentDownloads()
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
@@ -328,5 +470,6 @@ extension DownloadManager: WKDownloadDelegate {
             resumeDataByItemID[item.id] = resumeData
         }
         cleanupActiveDownload(download)
+        persistRecentDownloads()
     }
 }

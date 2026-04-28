@@ -45,4 +45,99 @@ struct DownloadManagerTests {
 
         #expect(remaining.map(\.id) == [active.id, failed.id])
     }
+
+    @MainActor
+    @Test("Persisted download items include only recent inactive entries")
+    func persistedDownloadItemsIncludeOnlyRecentInactiveEntries() throws {
+        let active = DownloadItem(filename: "active.txt", state: .downloading)
+        let firstCompleted = DownloadItem(
+            filename: "first.txt",
+            sourceURL: URL(string: "https://example.com/private/path?token=secret"),
+            destinationURL: URL(filePath: "/tmp/first.txt"),
+            progress: 1,
+            state: .completed
+        )
+        let secondCompleted = DownloadItem(
+            filename: "second.txt",
+            sourceURL: URL(string: "file:///tmp/source.txt"),
+            destinationURL: URL(filePath: "/tmp/second.txt"),
+            progress: 1,
+            state: .completed
+        )
+
+        let persistedItems = DownloadManager.persistedDownloadItems(
+            from: [active, firstCompleted, secondCompleted],
+            maxEntries: 1
+        )
+
+        #expect(persistedItems.map(\.filename) == ["first.txt"])
+        #expect(persistedItems.first?.sourceURL?.absoluteString == "https://example.com")
+    }
+
+    @MainActor
+    @Test("Restored downloads keep completed and failed entries without retry state")
+    func restoredDownloadsKeepCompletedAndFailedEntriesWithoutRetryState() throws {
+        let completedID = UUID()
+        let failedID = UUID()
+        let restoredItems = DownloadManager.restoredDownloadItems(from: [
+            PersistedDownloadItem(
+                id: completedID,
+                filename: "done.txt",
+                sourceURL: URL(string: "https://example.com"),
+                destinationURL: URL(filePath: "/tmp/done.txt"),
+                progress: 0.4,
+                state: .completed,
+                errorSummary: nil
+            ),
+            PersistedDownloadItem(
+                id: failedID,
+                filename: "failed.txt",
+                sourceURL: URL(string: "https://example.com"),
+                destinationURL: nil,
+                progress: 0.25,
+                state: .failed,
+                errorSummary: "Network connection was lost."
+            ),
+            PersistedDownloadItem(
+                id: UUID(),
+                filename: "active.txt",
+                sourceURL: nil,
+                destinationURL: nil,
+                progress: 0.5,
+                state: .downloading,
+                errorSummary: nil
+            )
+        ])
+
+        #expect(restoredItems.map(\.id) == [completedID, failedID])
+        #expect(restoredItems[0].progress == 1)
+        #expect(restoredItems[1].progress == 0.25)
+        #expect(!restoredItems[1].isRetryAvailable)
+    }
+
+    @Test("Download history store saves and loads JSON")
+    func downloadHistoryStoreSavesAndLoadsJSON() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = DownloadHistoryStore(
+            fileURL: directory.appendingPathComponent("downloads.json")
+        )
+        let item = PersistedDownloadItem(
+            id: UUID(),
+            filename: "report.pdf",
+            sourceURL: URL(string: "https://example.com"),
+            destinationURL: URL(filePath: "/tmp/report.pdf"),
+            progress: 1,
+            state: .completed,
+            errorSummary: nil
+        )
+
+        try store.save([item])
+
+        #expect(store.load() == [item])
+    }
 }
