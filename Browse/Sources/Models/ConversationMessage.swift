@@ -11,10 +11,10 @@ struct ConversationMessage: Identifiable, Codable {
         case assistant
     }
 
-    init(role: Role, content: String) {
-        self.id = UUID()
+    init(id: UUID = UUID(), role: Role, content: String, timestamp: Date = Date()) {
+        self.id = id
         self.role = role
         self.content = content
-        self.timestamp = Date()
+        self.timestamp = timestamp
     }
 }

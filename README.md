@@ -410,7 +410,7 @@ The main scene is a `WindowGroup` keyed by `BrowserWindowConfiguration`. A separ
 | `Services/ClaudeTypes.swift` | Claude request, message, and stream payload types. |
 | `Services/BriefingComposer.swift` | System prompts and user messages for initial briefings and follow-ups. |
 | `Services/BriefingCitationResolver.swift` | Resolves `cite://N` links to source URLs. |
-| `Services/BrowserPersistenceStore.swift` | JSON persistence for windows, tabs, briefings, navigation history, chat geometry, and page chats. |
+| `Services/BrowserPersistenceStore.swift` | SQLite persistence for windows, tabs, briefings, navigation history, chat geometry, page chats, and AI conversation history. |
 | `Services/BrowserWindowSessionController.swift` | Tracks open windows, restores additional windows, and prunes state on termination. |
 
 ### View Models
@@ -461,7 +461,7 @@ Browse treats the repository as suitable for public/open-source development. Run
 | Private briefing image preference | UserDefaults key `privacy.privateBriefingImageLoadingEnabled` |
 | Browsing data retention preference | UserDefaults key `retention.browsingData` |
 | AI history retention preference | UserDefaults key `retention.aiHistory` |
-| Normal browser session | JSON under the user's Application Support `Browse` directory |
+| Normal browser session | `browser.sqlite` under the user's Application Support `Browse` directory |
 | Normal web browsing data | Default WebKit website data store |
 | Private web browsing data | Non-persistent WebKit website data store |
 | Private favicon requests | Ephemeral URLSession, first-party/direct by default |
@@ -485,7 +485,7 @@ Normal windows persist:
 
 Blank new-tab-only windows are not restorable. Closed normal windows are removed from the restore list unless the app is terminating. On termination, Browse prunes stored windows to the currently open normal windows.
 
-Page chat snapshots are keyed by normalized URL. URL fragments are ignored, schemes and hosts are lowercased, and default ports are removed. Browse keeps up to 120 persisted page chat snapshots.
+Page chat snapshots are keyed by normalized URL. URL fragments are ignored, schemes and hosts are lowercased, and default ports are removed. Browse keeps up to 120 persisted page chat snapshots. Existing `browser-session.json` and `browser-state.json` files are imported into SQLite on first use.
 
 Settings includes controls to clear normal browsing data, clear AI history, and choose retention windows for each. Clearing browsing data removes saved normal-window session data and WebKit website data such as cookies and cache. Clearing AI history removes saved page chats and briefing follow-up conversations without deleting API keys.
 
@@ -551,7 +551,7 @@ Current tests cover:
 - immediate local autocomplete fallback behavior.
 - Google autocomplete request construction and parser cleanup.
 - tab shortcut ordering across Favorites, Pinned, Today, and Earlier.
-- multi-window persistence, pruning, and blank-window non-restoration.
+- multi-window SQLite persistence, legacy JSON migration, pruning, AI history persistence, and blank-window non-restoration.
 - favicon request normalization.
 - briefing citation resolution.
 

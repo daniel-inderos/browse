@@ -208,6 +208,89 @@ struct BrowserViewModelTests {
         #expect(reopenedWebVM.navigationHistorySnapshotIndex == 1)
     }
 
+    @Test("Restores persisted SQLite window state")
+    func restoresPersistedSQLiteWindowState() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        let webTabID = UUID()
+        let briefingTabID = UUID()
+        let previousURL = try #require(URL(string: "https://example.com/previous"))
+        let currentURL = try #require(URL(string: "https://example.com/current"))
+        let message = ConversationMessage(role: .user, content: "What changed?")
+        let state = PersistedBrowserState(
+            tabs: [
+                PersistedTabSnapshot(
+                    id: webTabID,
+                    kind: .web,
+                    title: "Current",
+                    url: currentURL,
+                    navigationHistory: [previousURL, currentURL],
+                    navigationHistoryIndex: 1,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(timeIntervalSince1970: 1_000),
+                    lastAccessedAt: Date(timeIntervalSince1970: 2_000),
+                    briefing: nil
+                ),
+                PersistedTabSnapshot(
+                    id: briefingTabID,
+                    kind: .briefing,
+                    title: "SQLite briefing",
+                    url: nil,
+                    navigationHistory: nil,
+                    navigationHistoryIndex: nil,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(timeIntervalSince1970: 1_100),
+                    lastAccessedAt: Date(timeIntervalSince1970: 2_100),
+                    briefing: PersistedBriefingSnapshot(
+                        document: BriefingDocument(query: "SQLite briefing"),
+                        phase: .complete,
+                        conversationHistory: [message]
+                    )
+                )
+            ],
+            activeTabID: webTabID,
+            isTabBarVisible: true,
+            tabBarWidth: 220,
+            chatPaneWidth: 380,
+            chatPaneHeight: 480,
+            chatPaneOffsetX: 0,
+            chatPaneOffsetY: 0,
+            pageChats: [
+                PersistedPageChatSnapshot(
+                    pageURL: currentURL,
+                    pageTitle: "Current",
+                    conversationHistory: [message],
+                    updatedAt: Date(timeIntervalSince1970: 2_200),
+                    isSidebarVisible: true
+                )
+            ]
+        )
+        store.save(state, forWindowID: windowID)
+
+        let restoredViewModel = BrowserViewModel(windowID: windowID, persistenceStore: store)
+
+        #expect(restoredViewModel.tabs.count == 2)
+        #expect(restoredViewModel.activeTabID == webTabID)
+        let restoredWebTab = try #require(restoredViewModel.tabs.first { $0.id == webTabID })
+        let restoredWebVM = try #require(restoredWebTab.webTabViewModel)
+        #expect(restoredWebVM.navigationHistorySnapshot == [previousURL, currentURL])
+        #expect(restoredWebVM.navigationHistorySnapshotIndex == 1)
+        let restoredBriefingTab = try #require(restoredViewModel.tabs.first { $0.id == briefingTabID })
+        #expect(restoredBriefingTab.briefingViewModel?.conversationHistory.first?.content == "What changed?")
+        restoredWebVM.currentURL = currentURL
+        restoredWebVM.pageTitle = "Current"
+        restoredViewModel.toggleChatPane()
+        #expect(restoredViewModel.chatViewModel?.conversationHistory.first?.content == "What changed?")
+    }
+
     private func makeViewModel() -> BrowserViewModel {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

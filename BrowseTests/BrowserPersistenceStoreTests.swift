@@ -89,6 +89,73 @@ struct BrowserPersistenceStoreTests {
         #expect(state.tabs.first { $0.kind == .briefing }?.briefing?.conversationHistory.isEmpty == true)
     }
 
+    @Test("saves session data in SQLite")
+    func savesSessionDataInSQLite() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+
+        store.save(makeState(tabTitle: "SQLite", url: URL(string: "https://example.com/sqlite")), forWindowID: windowID)
+
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("browser.sqlite").path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("browser-session.json").path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("browser-state.json").path))
+        #expect(store.loadWindowState(forWindowID: windowID)?.tabs.first?.title == "SQLite")
+    }
+
+    @Test("saves and restores AI history from SQLite")
+    func savesAndRestoresAIHistoryFromSQLite() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        store.save(makeStateWithAIHistory(), forWindowID: windowID)
+
+        let state = try #require(store.loadWindowState(forWindowID: windowID))
+        #expect(state.pageChats?.first?.conversationHistory.first?.content == "Question")
+        #expect(state.tabs.first { $0.kind == .briefing }?.briefing?.conversationHistory.first?.content == "Question")
+    }
+
+    @Test("migrates legacy JSON sessions into SQLite")
+    func migratesLegacyJSONSessionsIntoSQLite() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let windowID = UUID()
+        let session = PersistedBrowserWindowSession(
+            windows: [
+                PersistedBrowserWindowSnapshot(
+                    id: windowID,
+                    state: makeStateWithAIHistory(),
+                    lastUpdatedAt: Date(timeIntervalSince1970: 1_000)
+                )
+            ]
+        )
+        try writeLegacyJSON(session, to: directory.appendingPathComponent("browser-session.json"))
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let state = try #require(store.loadWindowState(forWindowID: windowID))
+
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("browser.sqlite").path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("browser-session.json").path))
+        #expect(state.tabs.count == 2)
+        #expect(state.pageChats?.first?.conversationHistory.first?.content == "Question")
+        #expect(state.tabs.first { $0.kind == .briefing }?.briefing?.conversationHistory.first?.content == "Question")
+    }
+
     @Test("clears persisted browsing data files")
     func clearsPersistedBrowsingDataFiles() throws {
         let directory = FileManager.default.temporaryDirectory
@@ -279,5 +346,13 @@ struct BrowserPersistenceStoreTests {
                 )
             ]
         )
+    }
+
+    private func writeLegacyJSON<T: Encodable>(_ value: T, to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        try data.write(to: url, options: .atomic)
     }
 }
