@@ -26,6 +26,7 @@ final class BrowserViewModel {
         let url: URL?
         let navigationHistory: [URL]?
         let navigationHistoryIndex: Int?
+        let pageZoom: Double?
     }
 
     var tabs: [Tab] = []
@@ -43,6 +44,8 @@ final class BrowserViewModel {
     var chatPaneHeight: CGFloat = 480
     var chatViewModel: ChatViewModel?
     var isCurrentURLCopyIndicatorVisible: Bool = false
+    var isPageZoomIndicatorVisible: Bool = false
+    var pageZoomIndicatorText: String?
     var isDownloadsPanelVisible: Bool = false
     let isPrivateBrowsing: Bool
     let downloadManager: DownloadManager
@@ -52,6 +55,7 @@ final class BrowserViewModel {
     private let persistenceStore: BrowserPersistenceStore
     private let allowsStatePersistence: Bool
     private let websiteDataStore: WKWebsiteDataStore
+    private let sitePermissionStore: SitePermissionStore
     private let tabAnimation: Animation = .spring(response: 0.26, dampingFraction: 0.86)
     private let readingScrollHideThreshold: CGFloat = 24
     private let intentBarRevealHoverGraceDuration: TimeInterval = 0.45
@@ -66,6 +70,7 @@ final class BrowserViewModel {
     private var pageChatViewModelsByKey: [String: ChatViewModel] = [:]
     private var visiblePageChatKeys: Set<String> = []
     @ObservationIgnored private var currentURLCopyIndicatorHideTask: Task<Void, Never>?
+    @ObservationIgnored private var pageZoomIndicatorHideTask: Task<Void, Never>?
     @ObservationIgnored private var scheduledPersistStateTask: Task<Void, Never>?
     @ObservationIgnored private let settingsObserverBag = NotificationObserverBag()
     private let maxRecentlyClosedTabs = 20
@@ -153,6 +158,26 @@ final class BrowserViewModel {
         return activeTab?.webTabViewModel?.canFindInPage == true
     }
 
+    var activePageZoomDisplayText: String? {
+        guard activeTab?.kind == .web else { return nil }
+        return activeTab?.webTabViewModel?.pageZoomDisplayText
+    }
+
+    var canZoomInActiveTab: Bool {
+        guard activeTab?.kind == .web else { return false }
+        return activeTab?.webTabViewModel?.canZoomIn == true
+    }
+
+    var canZoomOutActiveTab: Bool {
+        guard activeTab?.kind == .web else { return false }
+        return activeTab?.webTabViewModel?.canZoomOut == true
+    }
+
+    var canResetZoomInActiveTab: Bool {
+        guard activeTab?.kind == .web else { return false }
+        return activeTab?.webTabViewModel?.canResetZoom == true
+    }
+
     var isFindBarVisibleInActiveTab: Bool {
         activeTab?.webTabViewModel?.isFindBarVisible == true
     }
@@ -170,6 +195,7 @@ final class BrowserViewModel {
         self.downloadManager = downloadManager
         self.allowsStatePersistence = !isPrivateBrowsing
         self.websiteDataStore = isPrivateBrowsing ? .nonPersistent() : .default()
+        self.sitePermissionStore = isPrivateBrowsing ? .ephemeral() : .shared
 
         observeSettingsDataActions()
 
@@ -288,6 +314,7 @@ final class BrowserViewModel {
                 title: sourceTab.title,
                 url: sourceTab.url,
                 groupID: sourceTab.groupID,
+                pageZoom: sourceTab.webTabViewModel?.pageZoom ?? sourceTab.pageZoom,
                 isFavorite: sourceTab.isFavorite,
                 isPinned: sourceTab.isPinned
             )
@@ -469,6 +496,51 @@ final class BrowserViewModel {
 
     func findPreviousInActiveTab() {
         activeTab?.webTabViewModel?.findPrevious()
+    }
+
+    func zoomInActiveTab() {
+        guard activeTab?.kind == .web else { return }
+        changeActivePageZoom { $0.zoomIn() }
+    }
+
+    func zoomOutActiveTab() {
+        guard activeTab?.kind == .web else { return }
+        changeActivePageZoom { $0.zoomOut() }
+    }
+
+    func resetZoomInActiveTab() {
+        guard activeTab?.kind == .web else { return }
+        changeActivePageZoom { $0.resetZoom() }
+    }
+
+    private func changeActivePageZoom(_ change: (WebTabViewModel) -> Void) {
+        guard let webVM = activeTab?.webTabViewModel else { return }
+        let previousZoom = webVM.pageZoom
+        change(webVM)
+        guard webVM.pageZoom != previousZoom else { return }
+        showPageZoomIndicator(for: webVM)
+    }
+
+    private func showPageZoomIndicator(for webVM: WebTabViewModel) {
+        pageZoomIndicatorHideTask?.cancel()
+        pageZoomIndicatorText = webVM.pageZoomDisplayText
+
+        withAnimation(.easeOut(duration: 0.14)) {
+            isPageZoomIndicatorVisible = true
+        }
+
+        pageZoomIndicatorHideTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeOut(duration: 0.18)) {
+                self?.isPageZoomIndicatorVisible = false
+            }
+
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            self?.pageZoomIndicatorText = nil
+        }
     }
 
     func togglePin(_ id: UUID) {
@@ -753,8 +825,11 @@ final class BrowserViewModel {
             if activeTab.webTabViewModel == nil {
                 let vm = WebTabViewModel(
                     websiteDataStore: websiteDataStore,
-                    downloadManager: downloadManager
+                    downloadManager: downloadManager,
+                    isPrivateBrowsing: isPrivateBrowsing,
+                    sitePermissionStore: sitePermissionStore
                 )
+                vm.restorePageZoom(activeTab.pageZoom)
                 activeTab.webTabViewModel = vm
                 wireWebTabState(for: activeTab, webVM: vm)
             }
@@ -908,6 +983,7 @@ final class BrowserViewModel {
                 title: snapshot.title,
                 url: snapshot.url,
                 groupID: snapshot.groupID.flatMap { validGroupIDs.contains($0) ? $0 : nil },
+                pageZoom: snapshot.pageZoom,
                 isFavorite: snapshot.isFavorite ?? false,
                 isPinned: snapshot.isPinned,
                 createdAt: snapshot.createdAt,
@@ -917,8 +993,11 @@ final class BrowserViewModel {
             if tab.kind == .web {
                 let webVM = WebTabViewModel(
                     websiteDataStore: websiteDataStore,
-                    downloadManager: downloadManager
+                    downloadManager: downloadManager,
+                    isPrivateBrowsing: isPrivateBrowsing,
+                    sitePermissionStore: sitePermissionStore
                 )
+                webVM.restorePageZoom(snapshot.pageZoom)
                 tab.webTabViewModel = webVM
                 let history = restoredNavigationHistory(from: snapshot)
                 let historyIndex = restoredNavigationHistoryIndex(from: snapshot, history: history)
@@ -1097,6 +1176,7 @@ final class BrowserViewModel {
             groupID: tab.groupID,
             navigationHistory: makeNavigationHistorySnapshot(for: tab),
             navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex,
+            pageZoom: persistedPageZoom(for: tab),
             isFavorite: tab.isFavorite,
             isPinned: tab.isPinned,
             createdAt: tab.createdAt,
@@ -1110,8 +1190,15 @@ final class BrowserViewModel {
             title: tab.title,
             url: tab.url,
             navigationHistory: makeNavigationHistorySnapshot(for: tab),
-            navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex
+            navigationHistoryIndex: tab.webTabViewModel?.navigationHistorySnapshotIndex,
+            pageZoom: tab.pageZoom
         )
+    }
+
+    private func persistedPageZoom(for tab: Tab) -> Double? {
+        guard tab.kind == .web else { return nil }
+        let zoom = tab.webTabViewModel?.pageZoom ?? tab.pageZoom ?? WebTabViewModel.defaultPageZoom
+        return zoom == WebTabViewModel.defaultPageZoom ? nil : zoom
     }
 
     private func makePersistedPageChatSnapshots() -> [PersistedPageChatSnapshot]? {
@@ -1162,6 +1249,7 @@ final class BrowserViewModel {
         url: URL? = nil,
         id: UUID = UUID(),
         groupID: UUID? = nil,
+        pageZoom: Double? = nil,
         isFavorite: Bool = false,
         isPinned: Bool = false,
         createdAt: Date = Date(),
@@ -1173,6 +1261,7 @@ final class BrowserViewModel {
             title: title,
             url: url,
             groupID: groupID,
+            pageZoom: pageZoom,
             isFavorite: isFavorite,
             isPinned: isPinned,
             createdAt: createdAt,
@@ -1180,8 +1269,11 @@ final class BrowserViewModel {
         )
         let webVM = WebTabViewModel(
             websiteDataStore: websiteDataStore,
-            downloadManager: downloadManager
+            downloadManager: downloadManager,
+            isPrivateBrowsing: isPrivateBrowsing,
+            sitePermissionStore: sitePermissionStore
         )
+        webVM.restorePageZoom(pageZoom)
         tab.webTabViewModel = webVM
         wireWebTabState(for: tab, webVM: webVM)
         return tab
@@ -1196,8 +1288,11 @@ final class BrowserViewModel {
 
         let webVM = WebTabViewModel(
             websiteDataStore: websiteDataStore,
-            downloadManager: downloadManager
+            downloadManager: downloadManager,
+            isPrivateBrowsing: isPrivateBrowsing,
+            sitePermissionStore: sitePermissionStore
         )
+        webVM.restorePageZoom(tab.pageZoom)
         tab.webTabViewModel = webVM
         wireWebTabState(for: tab, webVM: webVM)
         return webVM
@@ -1383,6 +1478,7 @@ final class BrowserViewModel {
         if webVM.faviconURL != nil || webVM.currentURL != nil || tab.url == nil {
             tab.faviconURL = webVM.faviconURL
         }
+        tab.pageZoom = persistedPageZoom(for: tab)
         let pageTitle = webVM.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let shouldUseWebTitle =
             !pageTitle.isEmpty &&

@@ -259,6 +259,64 @@ struct BrowserPersistenceStoreTests {
         #expect(loadedState.tabs.first?.groupID == groupID)
     }
 
+    @Test("saves and restores web tab page zoom")
+    func savesAndRestoresWebTabPageZoom() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        let url = URL(string: "https://example.com/zoom")!
+        let state = PersistedBrowserState(
+            tabs: [
+                PersistedTabSnapshot(
+                    id: UUID(),
+                    kind: .web,
+                    title: "Zoomed",
+                    url: url,
+                    navigationHistory: [url],
+                    navigationHistoryIndex: 0,
+                    pageZoom: 1.25,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(),
+                    lastAccessedAt: Date(),
+                    briefing: nil
+                ),
+                PersistedTabSnapshot(
+                    id: UUID(),
+                    kind: .briefing,
+                    title: "Briefing",
+                    url: nil,
+                    navigationHistory: nil,
+                    navigationHistoryIndex: nil,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(),
+                    lastAccessedAt: Date(),
+                    briefing: nil
+                )
+            ],
+            activeTabID: nil,
+            isTabBarVisible: true,
+            tabBarWidth: 220,
+            chatPaneWidth: nil,
+            chatPaneHeight: nil,
+            chatPaneOffsetX: nil,
+            chatPaneOffsetY: nil,
+            pageChats: nil
+        )
+
+        store.save(state, forWindowID: windowID)
+
+        let loadedState = try #require(store.loadWindowState(forWindowID: windowID))
+        #expect(loadedState.tabs.first { $0.kind == .web }?.pageZoom == 1.25)
+        #expect(loadedState.tabs.first { $0.kind == .briefing }?.pageZoom == nil)
+    }
+
     private func makeState(
         tabTitle: String,
         url: URL?,

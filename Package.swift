@@ -17,7 +17,15 @@ let package = Package(
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
             ],
             path: "Browse/Sources",
-            exclude: ["Resources/Info.plist"]
+            exclude: ["Resources/Info.plist"],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Browse/Sources/Resources/Info.plist",
+                ], .when(platforms: [.macOS]))
+            ]
         ),
         .testTarget(
             name: "BrowseTests",

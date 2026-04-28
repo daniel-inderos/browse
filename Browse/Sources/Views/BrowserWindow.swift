@@ -203,6 +203,16 @@ struct BrowserWindow: View {
                         }
                 }
             }
+            .overlay(alignment: .top) {
+                if browserVM.isPageZoomIndicatorVisible,
+                   let zoomText = browserVM.pageZoomIndicatorText {
+                    pageZoomIndicator(zoomText)
+                        .padding(.top, browserVM.shouldShowIntentBar ? 54 : 14)
+                        .transition(
+                            .opacity.combined(with: .scale(scale: 0.94, anchor: .top))
+                        )
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 if browserVM.isCurrentURLCopyIndicatorVisible {
                     copiedURLIndicator
@@ -229,6 +239,7 @@ struct BrowserWindow: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeOut(duration: 0.18), value: browserVM.shouldShowIntentBar)
         .animation(.easeOut(duration: 0.16), value: browserVM.isCurrentURLCopyIndicatorVisible)
+        .animation(.easeOut(duration: 0.16), value: browserVM.isPageZoomIndicatorVisible)
         .onChange(of: browserVM.isTabBarVisible) { _, _ in
             fadePageContentForSidebarChange()
         }
@@ -261,6 +272,29 @@ struct BrowserWindow: View {
                 .shadow(color: Color.black.opacity(0.14), radius: 10, y: 4)
         )
         .accessibilityLabel("Current URL copied")
+    }
+
+    private func pageZoomIndicator(_ zoomText: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "plus.magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+
+            Text(zoomText)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .background(
+            Capsule(style: .continuous)
+                .fill(.ultraThinMaterial)
+                .shadow(color: Color.black.opacity(0.14), radius: 12, y: 5)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(BrowseColor.borderSubtle, lineWidth: 0.5)
+        )
+        .accessibilityLabel("Page zoom \(zoomText)")
     }
 
     private func installNavigationKeyEventMonitor() {

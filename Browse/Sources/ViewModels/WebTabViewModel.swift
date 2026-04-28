@@ -166,7 +166,12 @@ private final class BrowserWebView: WKWebView {
 @MainActor
 @Observable
 final class WebTabViewModel: NSObject {
-    var currentURL: URL?
+    var currentURL: URL? {
+        didSet {
+            guard currentURL != oldValue else { return }
+            refreshCurrentSitePermissionEntries()
+        }
+    }
     var pageTitle: String = "New Tab"
     var isLoading: Bool = false
     var canGoBack: Bool = false
@@ -183,7 +188,20 @@ final class WebTabViewModel: NSObject {
     var findMatchCount: Int?
     var findCurrentMatchIndex: Int?
     var findBarFocusRequestID: Int = 0
+    private(set) var currentSitePermissionEntries: [SitePermissionEntry] = []
+    var currentSitePermissionOrigin: SitePermissionOrigin? {
+        SitePermissionOrigin(url: currentURL)
+    }
+    var currentSitePermissionHost: String? {
+        currentSitePermissionOrigin?.displayName
+    }
     var canFindInPage: Bool { currentURL != nil }
+    private(set) var pageZoom: Double = WebTabViewModel.defaultPageZoom
+    var pageZoomPercent: Int { Int((pageZoom * 100).rounded()) }
+    var pageZoomDisplayText: String { "\(pageZoomPercent)%" }
+    var canZoomIn: Bool { pageZoom < Self.maximumPageZoom }
+    var canZoomOut: Bool { pageZoom > Self.minimumPageZoom }
+    var canResetZoom: Bool { pageZoom != Self.defaultPageZoom }
     var findStatusText: String {
         guard !findQuery.isEmpty else { return "" }
         guard let findMatchCount else { return "Searching..." }
@@ -193,6 +211,8 @@ final class WebTabViewModel: NSObject {
 
     private(set) var webView: WKWebView
     private let downloadManager: DownloadManager
+    private let isPrivateBrowsing: Bool
+    private let sitePermissionStore: SitePermissionStore
     private var observations: [NSKeyValueObservation] = []
     private(set) var scrollOffsetY: CGFloat = 0
     private var navigationHistory: [URL] = []
@@ -206,9 +226,16 @@ final class WebTabViewModel: NSObject {
     private var contextLinkHandler: ContextLinkMessageHandler?
     private var newTabLinkHandler: NewTabLinkMessageHandler?
 
+    static let defaultPageZoom = 1.0
+    static let minimumPageZoom = 0.5
+    static let maximumPageZoom = 3.0
+    static let pageZoomStep = 0.1
+
     init(
         websiteDataStore: WKWebsiteDataStore = .default(),
-        downloadManager: DownloadManager = .shared
+        downloadManager: DownloadManager = .shared,
+        isPrivateBrowsing: Bool = false,
+        sitePermissionStore: SitePermissionStore = .shared
     ) {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = websiteDataStore
@@ -242,6 +269,8 @@ final class WebTabViewModel: NSObject {
 
         self.webView = BrowserWebView(frame: .zero, configuration: config)
         self.downloadManager = downloadManager
+        self.isPrivateBrowsing = isPrivateBrowsing
+        self.sitePermissionStore = sitePermissionStore
         super.init()
 
         // Wire up the message handler *after* super.init so we can
@@ -286,6 +315,7 @@ final class WebTabViewModel: NSObject {
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.customUserAgent = Self.desktopSafariUserAgent
+        applyPageZoom()
         setUpWebViewObservers()
     }
 
@@ -488,6 +518,31 @@ final class WebTabViewModel: NSObject {
     func reloadFromOrigin() { webView.reloadFromOrigin() }
     func stopLoading() { webView.stopLoading() }
 
+    func zoomIn() {
+        setPageZoom(pageZoom + Self.pageZoomStep)
+    }
+
+    func zoomOut() {
+        setPageZoom(pageZoom - Self.pageZoomStep)
+    }
+
+    func resetZoom() {
+        setPageZoom(Self.defaultPageZoom)
+    }
+
+    func setPageZoom(_ zoom: Double) {
+        let clampedZoom = Self.clampedPageZoom(zoom)
+        guard clampedZoom != pageZoom else { return }
+        pageZoom = clampedZoom
+        applyPageZoom()
+        onStateChange?()
+    }
+
+    func restorePageZoom(_ zoom: Double?) {
+        pageZoom = Self.clampedPageZoom(zoom ?? Self.defaultPageZoom)
+        applyPageZoom()
+    }
+
     func showFindBar() {
         guard canFindInPage else { return }
         isFindBarVisible = true
@@ -554,6 +609,7 @@ final class WebTabViewModel: NSObject {
         canGoForward = false
         estimatedProgress = 0
         faviconURL = nil
+        currentSitePermissionEntries = []
         resetFindState()
     }
 
@@ -606,11 +662,101 @@ final class WebTabViewModel: NSObject {
         onOpenURLInNewTab?(url, activates)
     }
 
+    func resetPermissionDecisionsForCurrentSite() {
+        guard let origin = currentSitePermissionOrigin else { return }
+        sitePermissionStore.resetDecisions(for: origin)
+        refreshCurrentSitePermissionEntries()
+    }
+
+    private static func clampedPageZoom(_ zoom: Double) -> Double {
+        min(maximumPageZoom, max(minimumPageZoom, (zoom * 100).rounded() / 100))
+    }
+
+    private func applyPageZoom() {
+        webView.pageZoom = CGFloat(pageZoom)
+    }
+
     private func downloadLinkedFile(_ url: URL) {
         webView.startDownload(using: URLRequest(url: url)) { [weak self] download in
             guard let self else { return }
             self.downloadManager.begin(download, sourceURL: url)
         }
+    }
+
+    private func refreshCurrentSitePermissionEntries() {
+        currentSitePermissionEntries = sitePermissionStore.entries(for: currentSitePermissionOrigin)
+    }
+
+    private func mediaCaptureDecision(
+        for origin: SitePermissionOrigin,
+        kinds: [SitePermissionKind]
+    ) -> WKPermissionDecision? {
+        let storedDecisions = kinds.map { sitePermissionStore.decision(for: $0, origin: origin) }
+
+        if storedDecisions.contains(.deny) {
+            return .deny
+        }
+
+        if storedDecisions.allSatisfy({ $0 == .allow }) {
+            return .grant
+        }
+
+        return nil
+    }
+
+    private func shouldAllowScriptedPopup(
+        to url: URL,
+        requestedBy requestOriginURL: URL?
+    ) -> Bool {
+        guard let origin = SitePermissionOrigin(url: requestOriginURL ?? currentURL ?? url) else {
+            return false
+        }
+
+        if let storedDecision = sitePermissionStore.decision(for: .popups, origin: origin) {
+            return storedDecision.isAllowed
+        }
+
+        let decision = presentSitePermissionPrompt(
+            origin: origin,
+            kinds: [.popups],
+            actionDescription: "open pop-ups"
+        )
+        return decision.isAllowed
+    }
+
+    private func presentSitePermissionPrompt(
+        origin: SitePermissionOrigin,
+        kinds: [SitePermissionKind],
+        actionDescription: String
+    ) -> SitePermissionDecision {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "\(origin.displayName) wants to \(actionDescription)."
+        alert.informativeText = isPrivateBrowsing
+            ? "Allow only if you trust this site. This decision is remembered for this private window only."
+            : "Allow only if you trust this site."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Deny")
+
+        let rememberCheckbox: NSButton?
+        if isPrivateBrowsing {
+            rememberCheckbox = nil
+        } else {
+            let checkbox = NSButton(checkboxWithTitle: "Remember for this site", target: nil, action: nil)
+            checkbox.state = .on
+            alert.accessoryView = checkbox
+            rememberCheckbox = checkbox
+        }
+
+        let response = alert.runModal()
+        let decision: SitePermissionDecision = response == .alertFirstButtonReturn ? .allow : .deny
+        let shouldStoreDecision = rememberCheckbox?.state == .on || isPrivateBrowsing
+        if shouldStoreDecision {
+            sitePermissionStore.setDecision(decision, for: kinds, origin: origin)
+            refreshCurrentSitePermissionEntries()
+        }
+
+        return decision
     }
 
     // MARK: - Find in page
@@ -929,6 +1075,7 @@ final class WebTabViewModel: NSObject {
                         self.updateBackForwardAvailability()
                     }
                     self.faviconURL = self.currentURL
+                    self.refreshCurrentSitePermissionEntries()
                     self.onStateChange?()
                 }
             }
@@ -1007,6 +1154,13 @@ extension WebTabViewModel: WKNavigationDelegate {
 
         guard opensNewWindow || isCommandClick || isMiddleClick else { return .allow }
 
+        if opensNewWindow && !isLinkActivation {
+            let requestOriginURL = navigationAction.sourceFrame.request.url
+            guard shouldAllowScriptedPopup(to: url, requestedBy: requestOriginURL) else {
+                return .cancel
+            }
+        }
+
         openInNewTab(url, activates: !(isCommandClick || isMiddleClick))
         return .cancel
     }
@@ -1040,6 +1194,13 @@ extension WebTabViewModel: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         if let url = navigationAction.request.url {
+            if navigationAction.navigationType != .linkActivated {
+                let requestOriginURL = navigationAction.sourceFrame.request.url
+                guard shouldAllowScriptedPopup(to: url, requestedBy: requestOriginURL) else {
+                    return nil
+                }
+            }
+
             let isBackgroundOpen =
                 navigationAction.modifierFlags.contains(.command) ||
                 navigationAction.buttonNumber == 2
@@ -1047,5 +1208,29 @@ extension WebTabViewModel: WKUIDelegate {
         }
 
         return nil
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decideMediaCapturePermissionsFor origin: WKSecurityOrigin,
+        initiatedBy frame: WKFrameInfo,
+        type: WKMediaCaptureType
+    ) async -> WKPermissionDecision {
+        guard let siteOrigin = SitePermissionOrigin(securityOrigin: origin) else {
+            return .deny
+        }
+
+        let kinds = SitePermissionKind.mediaKinds(for: type)
+        if let storedDecision = mediaCaptureDecision(for: siteOrigin, kinds: kinds) {
+            return storedDecision
+        }
+
+        let actionDescription = kinds.map(\.promptName).joined(separator: " and ")
+        let decision = presentSitePermissionPrompt(
+            origin: siteOrigin,
+            kinds: kinds,
+            actionDescription: "use \(actionDescription)"
+        )
+        return decision.isAllowed ? .grant : .deny
     }
 }

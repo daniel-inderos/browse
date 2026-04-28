@@ -74,6 +74,7 @@ struct PersistedTabSnapshot: Codable {
     var groupID: UUID? = nil
     let navigationHistory: [URL]?
     let navigationHistoryIndex: Int?
+    var pageZoom: Double? = nil
     let isFavorite: Bool?
     let isPinned: Bool
     let createdAt: Date
@@ -325,6 +326,7 @@ struct BrowserPersistenceStore {
         try ensureDirectoryExists()
         let database = try SQLiteDatabase(url: databaseURL)
         try createSchema(in: database)
+        try migrateSchema(in: database)
         try migrateLegacyJSONIfNeeded(in: database, legacyStateWindowID: legacyStateWindowID)
         return try body(database)
     }
@@ -374,6 +376,7 @@ struct BrowserPersistenceStore {
                 is_pinned INTEGER NOT NULL,
                 created_at REAL NOT NULL,
                 last_accessed_at REAL NOT NULL,
+                page_zoom REAL,
                 briefing_document_json TEXT,
                 briefing_phase_json TEXT
             );
@@ -422,6 +425,25 @@ struct BrowserPersistenceStore {
             );
             """
         )
+    }
+
+    private func migrateSchema(in database: SQLiteDatabase) throws {
+        if try !table("tabs", hasColumn: "page_zoom", in: database) {
+            try database.execute("ALTER TABLE tabs ADD COLUMN page_zoom REAL")
+        }
+    }
+
+    private func table(_ tableName: String, hasColumn columnName: String, in database: SQLiteDatabase) throws -> Bool {
+        var hasColumn = false
+        try database.prepare("PRAGMA table_info(\(tableName))") { statement in
+            while try stepRow(statement, database: database) {
+                if columnText(statement, at: 1) == columnName {
+                    hasColumn = true
+                    break
+                }
+            }
+        }
+        return hasColumn
     }
 
     private func migrateLegacyJSONIfNeeded(in database: SQLiteDatabase, legacyStateWindowID: UUID?) throws {
@@ -568,7 +590,7 @@ struct BrowserPersistenceStore {
             """
             SELECT id, kind, title, url, group_id, navigation_history_index, is_favorite,
                    is_pinned, created_at, last_accessed_at, briefing_document_json,
-                   briefing_phase_json
+                   briefing_phase_json, page_zoom
             FROM tabs
             WHERE window_id = ?
             ORDER BY sort_order ASC
@@ -596,7 +618,8 @@ struct BrowserPersistenceStore {
                         createdAt: columnDate(statement, at: 8),
                         lastAccessedAt: columnDate(statement, at: 9),
                         briefingDocumentJSON: columnText(statement, at: 10),
-                        briefingPhaseJSON: columnText(statement, at: 11)
+                        briefingPhaseJSON: columnText(statement, at: 11),
+                        pageZoom: columnOptionalDouble(statement, at: 12)
                     )
                 )
             }
@@ -611,6 +634,7 @@ struct BrowserPersistenceStore {
                 groupID: row.groupID,
                 navigationHistory: try loadNavigationHistory(forTabID: row.id, in: database),
                 navigationHistoryIndex: row.navigationHistoryIndex,
+                pageZoom: row.pageZoom,
                 isFavorite: row.isFavorite,
                 isPinned: row.isPinned,
                 createdAt: row.createdAt,
@@ -833,9 +857,9 @@ struct BrowserPersistenceStore {
             INSERT INTO tabs (
                 id, window_id, sort_order, kind, title, url, group_id,
                 navigation_history_index, is_favorite, is_pinned, created_at,
-                last_accessed_at, briefing_document_json, briefing_phase_json
+                last_accessed_at, page_zoom, briefing_document_json, briefing_phase_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         ) { statement in
             try bindText(tab.id.uuidString, to: statement, at: 1, database: database)
@@ -850,8 +874,9 @@ struct BrowserPersistenceStore {
             try bindBool(tab.isPinned, to: statement, at: 10, database: database)
             try bindDate(tab.createdAt, to: statement, at: 11, database: database)
             try bindDate(tab.lastAccessedAt, to: statement, at: 12, database: database)
-            try bindText(try tab.briefing.map { try encodeJSON($0.document) }, to: statement, at: 13, database: database)
-            try bindText(try tab.briefing.map { try encodeJSON($0.phase) }, to: statement, at: 14, database: database)
+            try bindOptionalDouble(tab.pageZoom, to: statement, at: 13, database: database)
+            try bindText(try tab.briefing.map { try encodeJSON($0.document) }, to: statement, at: 14, database: database)
+            try bindText(try tab.briefing.map { try encodeJSON($0.phase) }, to: statement, at: 15, database: database)
             try stepDone(statement, database: database)
         }
 
@@ -1076,6 +1101,7 @@ private struct TabRow {
     let lastAccessedAt: Date
     let briefingDocumentJSON: String?
     let briefingPhaseJSON: String?
+    let pageZoom: Double?
 }
 
 private struct PageChatRow {
@@ -1359,6 +1385,7 @@ private extension PersistedTabSnapshot {
             groupID: groupID,
             navigationHistory: navigationHistory,
             navigationHistoryIndex: navigationHistoryIndex,
+            pageZoom: pageZoom,
             isFavorite: isFavorite,
             isPinned: isPinned,
             createdAt: createdAt,

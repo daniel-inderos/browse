@@ -22,6 +22,11 @@ struct IntentBarView: View {
             // Navigation buttons (when showing a web tab)
             if let webVM = browserVM.activeTab?.webTabViewModel {
                 navigationButtons(webVM)
+
+                if webVM.currentURL != nil {
+                    sitePermissionMenu(webVM)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
             }
 
             // Input field
@@ -457,6 +462,57 @@ struct IntentBarView: View {
             }
         }
         .padding(.leading, 2)
+    }
+
+    private func sitePermissionMenu(_ webVM: WebTabViewModel) -> some View {
+        Menu {
+            if let host = webVM.currentSitePermissionHost {
+                Text(host)
+            }
+
+            if webVM.currentSitePermissionEntries.isEmpty {
+                Text("No saved decisions")
+            } else {
+                ForEach(webVM.currentSitePermissionEntries) { entry in
+                    Label(
+                        "\(entry.kind.displayName): \(entry.decision.displayName)",
+                        systemImage: entry.kind.systemImageName
+                    )
+                }
+
+                Divider()
+            }
+
+            Button(role: .destructive) {
+                webVM.resetPermissionDecisionsForCurrentSite()
+            } label: {
+                Label("Reset Site Decisions", systemImage: "arrow.counterclockwise")
+            }
+            .disabled(webVM.currentSitePermissionEntries.isEmpty)
+        } label: {
+            Image(systemName: sitePermissionIconName(for: webVM))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(webVM.currentSitePermissionEntries.isEmpty ? .secondary : BrowseColor.accent)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(0.045))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(BrowseColor.borderSubtle, lineWidth: 0.5)
+                )
+                .contentShape(Rectangle())
+                .accessibilityLabel("Site permissions")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Site permissions")
+    }
+
+    private func sitePermissionIconName(for webVM: WebTabViewModel) -> String {
+        webVM.currentSitePermissionEntries.isEmpty ? "lock" : "lock.badge.clock"
     }
 
     private func navButton(icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {

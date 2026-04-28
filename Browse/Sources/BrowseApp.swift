@@ -242,6 +242,26 @@ private struct BrowserCommands: Commands {
             .keyboardShortcut("r", modifiers: [.command, .shift])
             .disabled(browserViewModel == nil)
 
+            Divider()
+
+            Button("Zoom In") {
+                browserViewModel?.zoomInActiveTab()
+            }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(browserViewModel?.canZoomInActiveTab != true)
+
+            Button("Zoom Out") {
+                browserViewModel?.zoomOutActiveTab()
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(browserViewModel?.canZoomOutActiveTab != true)
+
+            Button("Reset Zoom \(browserViewModel?.activePageZoomDisplayText ?? "100%")") {
+                browserViewModel?.resetZoomInActiveTab()
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .disabled(browserViewModel?.canResetZoomInActiveTab != true)
+
             Button("Back") {
                 browserViewModel?.goBackInActiveTab()
             }

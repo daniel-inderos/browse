@@ -157,6 +157,43 @@ struct BrowserViewModelTests {
         #expect(!viewModel.isFindBarVisibleInActiveTab)
     }
 
+    @Test("Page zoom is scoped to web tabs and ignored by briefing tabs")
+    func pageZoomIsScopedToWebTabsAndIgnoredByBriefingTabs() throws {
+        let viewModel = makeViewModel()
+        let firstTab = try #require(viewModel.activeTab)
+        let firstWebVM = try #require(firstTab.webTabViewModel)
+
+        #expect(!viewModel.isPageZoomIndicatorVisible)
+        viewModel.zoomInActiveTab()
+        #expect(firstWebVM.pageZoom == 1.1)
+        #expect(firstTab.pageZoom == 1.1)
+        #expect(viewModel.activePageZoomDisplayText == "110%")
+        #expect(viewModel.isPageZoomIndicatorVisible)
+        #expect(viewModel.pageZoomIndicatorText == "110%")
+        #expect(viewModel.canResetZoomInActiveTab)
+
+        viewModel.newTab()
+        let secondTab = try #require(viewModel.activeTab)
+        let secondWebVM = try #require(secondTab.webTabViewModel)
+        #expect(secondWebVM.pageZoom == WebTabViewModel.defaultPageZoom)
+
+        viewModel.selectTab(firstTab.id)
+        #expect(firstWebVM.pageZoom == 1.1)
+        viewModel.resetZoomInActiveTab()
+        #expect(firstWebVM.pageZoom == WebTabViewModel.defaultPageZoom)
+        #expect(firstTab.pageZoom == nil)
+        #expect(viewModel.pageZoomIndicatorText == "100%")
+
+        let briefingTab = Tab(kind: .briefing, title: "Briefing")
+        viewModel.tabs.append(briefingTab)
+        viewModel.selectTab(briefingTab.id)
+
+        #expect(viewModel.activePageZoomDisplayText == nil)
+        #expect(!viewModel.canZoomInActiveTab)
+        viewModel.zoomInActiveTab()
+        #expect(secondWebVM.pageZoom == WebTabViewModel.defaultPageZoom)
+    }
+
     @Test("Page chat sidebar visibility follows the active page")
     func pageChatSidebarVisibilityFollowsActivePage() throws {
         let viewModel = makeViewModel()
@@ -216,6 +253,7 @@ struct BrowserViewModelTests {
         tab.url = url
         originalWebVM.currentURL = url
         originalWebVM.pageTitle = "Example Article"
+        originalWebVM.setPageZoom(1.25)
         originalWebVM.restoreNavigationHistory([previousURL, url], currentIndex: 1)
 
         viewModel.closeTab(tab.id)
@@ -234,6 +272,7 @@ struct BrowserViewModelTests {
         #expect(reopenedWebVM !== originalWebVM)
         #expect(reopenedWebVM.navigationHistorySnapshot == [previousURL, url])
         #expect(reopenedWebVM.navigationHistorySnapshotIndex == 1)
+        #expect(reopenedWebVM.pageZoom == 1.25)
     }
 
     @Test("Restores persisted SQLite window state")
@@ -260,6 +299,7 @@ struct BrowserViewModelTests {
                     url: currentURL,
                     navigationHistory: [previousURL, currentURL],
                     navigationHistoryIndex: 1,
+                    pageZoom: 1.25,
                     isFavorite: false,
                     isPinned: false,
                     createdAt: Date(timeIntervalSince1970: 1_000),
@@ -311,6 +351,7 @@ struct BrowserViewModelTests {
         let restoredWebVM = try #require(restoredWebTab.webTabViewModel)
         #expect(restoredWebVM.navigationHistorySnapshot == [previousURL, currentURL])
         #expect(restoredWebVM.navigationHistorySnapshotIndex == 1)
+        #expect(restoredWebVM.pageZoom == 1.25)
         let restoredBriefingTab = try #require(restoredViewModel.tabs.first { $0.id == briefingTabID })
         #expect(restoredBriefingTab.briefingViewModel?.conversationHistory.first?.content == "What changed?")
         restoredWebVM.currentURL = currentURL

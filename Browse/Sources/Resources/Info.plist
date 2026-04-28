@@ -24,6 +24,10 @@
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Browse needs camera access when a website requests video capture.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Browse needs microphone access when a website requests audio capture.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

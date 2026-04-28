@@ -11,5 +11,10 @@
     <!-- Allow unsigned executable memory (fallback for older JIT paths) -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
+    <!-- Allow web pages to request camera and microphone capture when sandboxed. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>
