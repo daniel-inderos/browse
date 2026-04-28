@@ -178,6 +178,18 @@ final class WebTabViewModel: NSObject {
     var onOpenURLInNewTab: ((URL, Bool) -> Void)?
     var navigationHistorySnapshot: [URL] { navigationHistory }
     var navigationHistorySnapshotIndex: Int? { navigationHistoryIndex }
+    var isFindBarVisible: Bool = false
+    var findQuery: String = ""
+    var findMatchCount: Int?
+    var findCurrentMatchIndex: Int?
+    var findBarFocusRequestID: Int = 0
+    var canFindInPage: Bool { currentURL != nil }
+    var findStatusText: String {
+        guard !findQuery.isEmpty else { return "" }
+        guard let findMatchCount else { return "Searching..." }
+        guard findMatchCount > 0 else { return "No results" }
+        return "\(findCurrentMatchIndex ?? 1) of \(findMatchCount)"
+    }
 
     private(set) var webView: WKWebView
     private let downloadManager: DownloadManager
@@ -187,6 +199,7 @@ final class WebTabViewModel: NSObject {
     private var navigationHistoryIndex: Int?
     private var pendingHistoryLoadIndex: Int?
     private var usesRestoredNavigationHistoryFallback = false
+    @ObservationIgnored private var findOperationID = 0
 
     /// Prevent the handler from being collected while the content controller retains it.
     private var scrollHandler: ScrollMessageHandler?
@@ -475,6 +488,45 @@ final class WebTabViewModel: NSObject {
     func reloadFromOrigin() { webView.reloadFromOrigin() }
     func stopLoading() { webView.stopLoading() }
 
+    func showFindBar() {
+        guard canFindInPage else { return }
+        isFindBarVisible = true
+        findBarFocusRequestID += 1
+
+        if !findQuery.isEmpty {
+            performFind(backwards: false, resetsIndex: findCurrentMatchIndex == nil)
+        }
+    }
+
+    func closeFindBar() {
+        isFindBarVisible = false
+        webView.window?.makeFirstResponder(webView)
+    }
+
+    func updateFindQuery(_ query: String) {
+        guard findQuery != query else { return }
+        findQuery = query
+        findOperationID += 1
+
+        guard !query.isEmpty else {
+            findMatchCount = nil
+            findCurrentMatchIndex = nil
+            return
+        }
+
+        findMatchCount = nil
+        findCurrentMatchIndex = nil
+        performFind(backwards: false, resetsIndex: true)
+    }
+
+    func findNext() {
+        performFind(backwards: false, resetsIndex: false)
+    }
+
+    func findPrevious() {
+        performFind(backwards: true, resetsIndex: false)
+    }
+
     func closePage() {
         onStateChange = nil
         onScrollPositionChange = nil
@@ -502,6 +554,7 @@ final class WebTabViewModel: NSObject {
         canGoForward = false
         estimatedProgress = 0
         faviconURL = nil
+        resetFindState()
     }
 
     func restoreNavigationHistory(_ urls: [URL], currentIndex: Int?) {
@@ -558,6 +611,198 @@ final class WebTabViewModel: NSObject {
             guard let self else { return }
             self.downloadManager.begin(download, sourceURL: url)
         }
+    }
+
+    // MARK: - Find in page
+
+    private struct FindMatchSnapshot {
+        let count: Int
+        let selectedIndex: Int?
+    }
+
+    private func resetFindState() {
+        isFindBarVisible = false
+        findQuery = ""
+        findMatchCount = nil
+        findCurrentMatchIndex = nil
+        findOperationID += 1
+    }
+
+    private func resetFindResultsForPageChange() {
+        findOperationID += 1
+        findMatchCount = findQuery.isEmpty ? nil : 0
+        findCurrentMatchIndex = nil
+    }
+
+    private func performFind(backwards: Bool, resetsIndex: Bool) {
+        guard canFindInPage, !findQuery.isEmpty else { return }
+
+        let query = findQuery
+        findOperationID += 1
+        let operationID = findOperationID
+        let configuration = WKFindConfiguration()
+        configuration.backwards = backwards
+        configuration.wraps = true
+
+        webView.find(query, configuration: configuration) { [weak self] result in
+            Task { @MainActor [weak self] in
+                await self?.handleFindResult(
+                    result,
+                    query: query,
+                    operationID: operationID,
+                    backwards: backwards,
+                    resetsIndex: resetsIndex
+                )
+            }
+        }
+    }
+
+    private func handleFindResult(
+        _ result: WKFindResult,
+        query: String,
+        operationID: Int,
+        backwards: Bool,
+        resetsIndex: Bool
+    ) async {
+        guard operationID == findOperationID, query == findQuery else { return }
+
+        if !result.matchFound {
+            let snapshot = await findMatchSnapshot(for: query)
+            guard operationID == findOperationID, query == findQuery else { return }
+            findMatchCount = snapshot?.count ?? 0
+            findCurrentMatchIndex = nil
+            return
+        }
+
+        let fallbackIndex = trackedFindIndexAfterSuccessfulFind(
+            backwards: backwards,
+            resetsIndex: resetsIndex
+        )
+        let snapshot = await findMatchSnapshot(for: query)
+        guard operationID == findOperationID, query == findQuery else { return }
+
+        if let snapshot {
+            findMatchCount = snapshot.count
+            if snapshot.count > 0 {
+                findCurrentMatchIndex = snapshot.selectedIndex ?? fallbackIndex
+            } else {
+                findCurrentMatchIndex = nil
+            }
+        } else {
+            findCurrentMatchIndex = fallbackIndex
+        }
+    }
+
+    private func trackedFindIndexAfterSuccessfulFind(backwards: Bool, resetsIndex: Bool) -> Int {
+        if resetsIndex || findCurrentMatchIndex == nil {
+            if backwards, let findMatchCount, findMatchCount > 0 {
+                return findMatchCount
+            }
+            return 1
+        }
+
+        let current = findCurrentMatchIndex ?? 1
+        guard let findMatchCount, findMatchCount > 0 else {
+            return max(1, current + (backwards ? -1 : 1))
+        }
+
+        if backwards {
+            return current > 1 ? current - 1 : findMatchCount
+        }
+        return current < findMatchCount ? current + 1 : 1
+    }
+
+    private func findMatchSnapshot(for query: String) async -> FindMatchSnapshot? {
+        guard let queryLiteral = Self.javaScriptStringLiteral(query) else { return nil }
+        let js = Self.findMatchSnapshotJS(queryLiteral: queryLiteral)
+
+        do {
+            guard let result = try await webView.evaluateJavaScript(js) as? [String: Any],
+                  let countNumber = result["count"] as? NSNumber else {
+                return nil
+            }
+            let selectedIndex = (result["selectedIndex"] as? NSNumber)?.intValue
+            return FindMatchSnapshot(count: countNumber.intValue, selectedIndex: selectedIndex)
+        } catch {
+            webTabLogger.warning("Find match snapshot failed; category=\(Self.errorCategory(error), privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func javaScriptStringLiteral(_ string: String) -> String? {
+        guard let data = try? JSONEncoder().encode(string) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func findMatchSnapshotJS(queryLiteral: String) -> String {
+        """
+        (function(needle) {
+            if (!needle || !document.body) {
+                return { count: 0, selectedIndex: null };
+            }
+
+            var needleLower = needle.toLocaleLowerCase();
+            var selection = window.getSelection ? window.getSelection() : null;
+            var selectedRange = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+            var selectedText = selection ? selection.toString().toLocaleLowerCase() : '';
+            var count = 0;
+            var selectedIndex = null;
+
+            function acceptsTextNode(node) {
+                if (!node || !node.nodeValue) { return false; }
+                var parent = node.parentElement;
+                if (!parent) { return false; }
+                var tag = parent.tagName ? parent.tagName.toLowerCase() : '';
+                if (tag === 'script' || tag === 'style' || tag === 'noscript') { return false; }
+                var style = window.getComputedStyle ? window.getComputedStyle(parent) : null;
+                if (style && (style.display === 'none' || style.visibility === 'hidden')) { return false; }
+                return true;
+            }
+
+            function isSelectedMatch(node, start) {
+                if (!selectedRange || selectedText !== needleLower) { return false; }
+                try {
+                    var range = document.createRange();
+                    range.setStart(node, start);
+                    range.setEnd(node, start + needle.length);
+                    return range.compareBoundaryPoints(Range.START_TO_START, selectedRange) === 0
+                        && range.compareBoundaryPoints(Range.END_TO_END, selectedRange) === 0;
+                } catch (_) {
+                    return false;
+                }
+            }
+
+            var walker = document.createTreeWalker(
+                document.body,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: function(node) {
+                        return acceptsTextNode(node)
+                            ? NodeFilter.FILTER_ACCEPT
+                            : NodeFilter.FILTER_REJECT;
+                    }
+                }
+            );
+
+            var node;
+            while ((node = walker.nextNode())) {
+                var text = node.nodeValue || '';
+                var haystack = text.toLocaleLowerCase();
+                var searchStart = 0;
+                while (true) {
+                    var matchStart = haystack.indexOf(needleLower, searchStart);
+                    if (matchStart === -1) { break; }
+                    count += 1;
+                    if (selectedIndex === null && isSelectedMatch(node, matchStart)) {
+                        selectedIndex = count;
+                    }
+                    searchStart = matchStart + Math.max(needle.length, 1);
+                }
+            }
+
+            return { count: count, selectedIndex: selectedIndex };
+        })(\(queryLiteral));
+        """
     }
 
     // MARK: - Navigation history
@@ -715,6 +960,7 @@ extension WebTabViewModel: WKNavigationDelegate {
             isLoading = true
             // Reset scroll offset to 0 for the new page.
             handleScrollMessage(0)
+            resetFindResultsForPageChange()
             onStateChange?()
         }
     }
@@ -724,6 +970,9 @@ extension WebTabViewModel: WKNavigationDelegate {
             isLoading = false
             pageTitle = webView.title ?? currentURL?.host ?? "Untitled"
             updateBackForwardAvailability()
+            if isFindBarVisible, !findQuery.isEmpty {
+                performFind(backwards: false, resetsIndex: true)
+            }
             onStateChange?()
         }
     }

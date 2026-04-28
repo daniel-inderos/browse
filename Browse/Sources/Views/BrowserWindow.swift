@@ -278,11 +278,23 @@ struct BrowserWindow: View {
     }
 
     private func handleNavigationKeyDown(_ event: NSEvent) -> NSEvent? {
+        if event.keyCode == 53, browserVM.isFindBarVisibleInActiveTab {
+            browserVM.closeFindInActiveTab()
+            return nil
+        }
+
         let shortcutFlags: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
         let flags = event.modifierFlags.intersection(shortcutFlags)
         guard flags == .command else { return event }
         guard NSApp.keyWindow != nil else { return event }
         guard browserVM.activeTab?.kind == .web else { return event }
+
+        if event.charactersIgnoringModifiers?.lowercased() == "f" {
+            guard browserVM.canFindInActiveTab else { return event }
+            browserVM.showFindInActiveTab()
+            return nil
+        }
+
         guard !isIntentBarTextFocused else { return event }
 
         switch event.keyCode {

@@ -278,6 +278,13 @@ private struct BrowserCommands: Commands {
             .keyboardShortcut("l", modifiers: .command)
             .disabled(browserViewModel == nil)
 
+            Button("Find in Page") {
+                NSApp.activate(ignoringOtherApps: true)
+                browserViewModel?.showFindInActiveTab()
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(browserViewModel?.canFindInActiveTab != true)
+
             Button("Copy Current URL") {
                 copyCurrentURL()
             }

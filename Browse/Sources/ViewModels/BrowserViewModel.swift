@@ -148,6 +148,15 @@ final class BrowserViewModel {
         activeTab?.kind != .briefing && isIntentBarVisible
     }
 
+    var canFindInActiveTab: Bool {
+        guard activeTab?.kind == .web else { return false }
+        return activeTab?.webTabViewModel?.canFindInPage == true
+    }
+
+    var isFindBarVisibleInActiveTab: Bool {
+        activeTab?.webTabViewModel?.isFindBarVisible == true
+    }
+
     init(
         windowID: UUID = UUID(),
         isPrivateBrowsing: Bool = false,
@@ -444,6 +453,24 @@ final class BrowserViewModel {
         activeTab?.webTabViewModel?.goForward()
     }
 
+    func showFindInActiveTab() {
+        guard canFindInActiveTab else { return }
+        revealIntentBar()
+        activeTab?.webTabViewModel?.showFindBar()
+    }
+
+    func closeFindInActiveTab() {
+        activeTab?.webTabViewModel?.closeFindBar()
+    }
+
+    func findNextInActiveTab() {
+        activeTab?.webTabViewModel?.findNext()
+    }
+
+    func findPreviousInActiveTab() {
+        activeTab?.webTabViewModel?.findPrevious()
+    }
+
     func togglePin(_ id: UUID) {
         guard let tab = tabs.first(where: { $0.id == id }) else { return }
         tab.isPinned.toggle()
@@ -713,6 +740,7 @@ final class BrowserViewModel {
 
     func hideIntentBarIfReadingPositionActive() {
         guard isIntentBarVisible else { return }
+        guard !isFindBarVisibleInActiveTab else { return }
         guard !isIntentBarRevealZoneHovered else { return }
         guard Date() >= intentBarRevealHoverGraceDeadline else { return }
         if shouldHideIntentBarForCurrentContext() {
@@ -1383,6 +1411,11 @@ final class BrowserViewModel {
     }
 
     private func updateIntentBarVisibility(for offsetY: CGFloat) {
+        if isFindBarVisibleInActiveTab {
+            isIntentBarVisible = true
+            return
+        }
+
         if offsetY <= 0 {
             isIntentBarVisible = true
         } else if offsetY > readingScrollHideThreshold {
@@ -1397,6 +1430,7 @@ final class BrowserViewModel {
         guard let activeTab else { return false }
         switch activeTab.kind {
         case .web:
+            guard activeTab.webTabViewModel?.isFindBarVisible != true else { return false }
             return (activeTab.webTabViewModel?.scrollOffsetY ?? 0) > readingScrollHideThreshold
         case .briefing:
             return (briefingScrollOffsetsByTabID[activeTab.id] ?? 0) > readingScrollHideThreshold

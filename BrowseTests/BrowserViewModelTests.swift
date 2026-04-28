@@ -129,6 +129,34 @@ struct BrowserViewModelTests {
         #expect(viewModel.isCurrentURLCopyIndicatorVisible)
     }
 
+    @Test("Find in page is available only for loaded web tabs")
+    func findInPageIsAvailableOnlyForLoadedWebTabs() throws {
+        let viewModel = makeViewModel()
+        let webTab = try #require(viewModel.activeTab)
+        let webVM = try #require(webTab.webTabViewModel)
+
+        #expect(!viewModel.canFindInActiveTab)
+        viewModel.showFindInActiveTab()
+        #expect(!webVM.isFindBarVisible)
+
+        webVM.currentURL = URL(string: "https://example.com")
+        #expect(viewModel.canFindInActiveTab)
+
+        viewModel.isIntentBarVisible = false
+        viewModel.showFindInActiveTab()
+        #expect(webVM.isFindBarVisible)
+        #expect(viewModel.isFindBarVisibleInActiveTab)
+        #expect(viewModel.isIntentBarVisible)
+
+        let briefingTab = Tab(kind: .briefing, title: "Briefing")
+        viewModel.tabs.append(briefingTab)
+        viewModel.activeTabID = briefingTab.id
+
+        #expect(!viewModel.canFindInActiveTab)
+        viewModel.showFindInActiveTab()
+        #expect(!viewModel.isFindBarVisibleInActiveTab)
+    }
+
     @Test("Page chat sidebar visibility follows the active page")
     func pageChatSidebarVisibilityFollowsActivePage() throws {
         let viewModel = makeViewModel()
