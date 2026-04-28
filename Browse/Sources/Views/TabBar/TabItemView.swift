@@ -90,6 +90,7 @@ struct TabItemView: View {
                         lineWidth: 0.5
                     )
             )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
