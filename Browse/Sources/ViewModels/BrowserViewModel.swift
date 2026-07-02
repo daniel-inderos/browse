@@ -860,7 +860,7 @@ final class BrowserViewModel {
         case .web:
             content = await tab.webTabViewModel?.extractPageContent(maxLength: 8_000)
         case .briefing:
-            content = tab.briefingViewModel?.document.streamedMarkdown
+            content = tab.briefingViewModel?.document.renderedMarkdown
         }
 
         chatViewModel.addMentionedTabContext(

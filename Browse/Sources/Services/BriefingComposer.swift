@@ -1,6 +1,40 @@
 import Foundation
 
 struct BriefingComposer {
+    /// Structured-output schema the briefing response must conform to. The API
+    /// guarantees the final response is valid JSON matching this shape, which
+    /// replaces the old fragile markdown-shape parsing.
+    static let briefingSchema: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "headline": .object([
+                "type": .string("string"),
+                "description": .string("Compelling headline that directly answers or addresses the question"),
+            ]),
+            "tldr": .object([
+                "type": .string("string"),
+                "description": .string("2-3 sentence summary that gives the core answer"),
+            ]),
+            "sections": .object([
+                "type": .string("array"),
+                "items": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "title": .object(["type": .string("string")]),
+                        "content": .object([
+                            "type": .string("string"),
+                            "description": .string("Section body as markdown with inline [[N]](cite://N) citations"),
+                        ]),
+                    ]),
+                    "required": .array([.string("title"), .string("content")]),
+                    "additionalProperties": .bool(false),
+                ]),
+            ]),
+        ]),
+        "required": .array([.string("headline"), .string("tldr"), .string("sections")]),
+        "additionalProperties": .bool(false),
+    ])
+
     func buildSystemPrompt() -> String {
         """
         You are Browse, an AI research assistant embedded in a native web browser. \
@@ -8,34 +42,20 @@ struct BriefingComposer {
         results with full page content from multiple sources.
 
         Your job is to synthesize a comprehensive, well-structured briefing that \
-        answers the user's question definitively.
-
-        FORMAT YOUR RESPONSE AS MARKDOWN with this exact structure:
-
-        # [Compelling headline that directly answers or addresses the question]
-
-        **TL;DR:** [2-3 sentence summary that gives the core answer]
-
-        ## [First Major Section Title]
-        [Content with inline citations as markdown links like [[1]](cite://1), [[2]](cite://2)]
-
-        ## [Second Major Section Title]
-        [More content with citations...]
-
-        ## Key Takeaways
-        - [Bullet point with citation [[N]](cite://N)]
-        - [Another takeaway]
+        answers the user's question definitively. Respond with a JSON object \
+        containing a headline, a TL;DR, and 3-5 sections.
 
         RULES:
-        - Use [[N]](cite://N) format for ALL citations, where N is the source number
+        - "headline" directly answers or addresses the question
+        - "tldr" is a 2-3 sentence summary giving the core answer
+        - Each section has a "title" and markdown "content"
+        - Use [[N]](cite://N) format for ALL citations in section content, where N is the source number
+        - Every factual claim must have at least one citation
         - Be definitive and direct, not hedging. Say "X is Y" not "X appears to be Y"
         - Use clear, journalistic prose optimized for scanning
-        - Structure with headers, bullets, and bold key terms
-        - Every factual claim must have at least one citation
-        - Include 3-5 sections depending on complexity
-        - End with a "Key Takeaways" section of 3-5 bullets
-        - Do NOT include a sources list at the end (we render that separately)
-        - Do NOT use ```markdown fences
+        - Structure section content with bullets and bold key terms
+        - The final section must be titled "Key Takeaways" with 3-5 bullets
+        - Do NOT include a sources list (we render that separately)
         """
     }
 

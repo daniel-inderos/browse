@@ -114,7 +114,8 @@ final class BriefingViewModel {
 
         let stream = claudeClient.streamMessage(
             system: systemPrompt,
-            messages: [ClaudeMessage(role: "user", content: userMessage)]
+            messages: [ClaudeMessage(role: "user", content: userMessage)],
+            outputSchema: BriefingComposer.briefingSchema
         )
 
         var receivedAnyText = false
@@ -175,7 +176,7 @@ final class BriefingViewModel {
 
         let systemPrompt = composer.buildFollowUpSystemPrompt(
             originalQuery: document.query,
-            originalBriefing: document.streamedMarkdown
+            originalBriefing: document.renderedMarkdown
         )
 
         var messages: [ClaudeMessage] = []
@@ -235,88 +236,35 @@ final class BriefingViewModel {
         let now = Date()
         guard now.timeIntervalSince(lastParseTime) >= parseInterval else { return }
         lastParseTime = now
-        parseMarkdown()
+        parseStreamedJSON()
     }
 
     private func parseFinal() {
-        parseMarkdown()
-        briefingLogger.debug("Parsed briefing markdown; headlineLength=\(self.document.headline.count, privacy: .public), tldrLength=\(self.document.tldr.count, privacy: .public), sections=\(self.document.sections.count, privacy: .public)")
+        parseStreamedJSON()
+        // Structured outputs guarantee valid JSON on success, but if nothing
+        // parsed and we still have text, surface it rather than a blank page.
+        if document.headline.isEmpty, document.sections.isEmpty,
+           !document.streamedMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            document.sections = [BriefingSection(title: "Briefing", content: document.streamedMarkdown)]
+        }
+        briefingLogger.debug("Parsed briefing; headlineLength=\(self.document.headline.count, privacy: .public), tldrLength=\(self.document.tldr.count, privacy: .public), sections=\(self.document.sections.count, privacy: .public)")
     }
 
-    private func parseMarkdown() {
-        let md = document.streamedMarkdown
+    private func parseStreamedJSON() {
+        guard let parsed = BriefingStreamParser.parse(
+            document.streamedMarkdown,
+            existingSections: document.sections
+        ) else { return }
 
-        // Extract headline from first # line (not ##)
-        // Always re-parse: during streaming, the line may arrive incrementally
-        var foundHeadline = ""
-        for line in md.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("# ") && !trimmed.hasPrefix("## ") {
-                foundHeadline = String(trimmed.dropFirst(2))
-                break
-            }
+        if !parsed.headline.isEmpty {
+            document.headline = parsed.headline
         }
-        if !foundHeadline.isEmpty {
-            document.headline = foundHeadline
+        if !parsed.tldr.isEmpty {
+            document.tldr = parsed.tldr
         }
-
-        // Extract TL;DR — always re-parse to capture full text during streaming
-        if let range = md.range(of: "**TL;DR:**") ?? md.range(of: "**TL;DR**:") ?? md.range(of: "**TLDR:**") ?? md.range(of: "**TL;DR**") {
-            let after = md[range.upperBound...]
-            // Take everything until the next double newline or ## header
-            let tldrEnd = after.range(of: "\n\n") ?? after.range(of: "\n## ")
-            let tldrText: String
-            if let end = tldrEnd {
-                tldrText = String(after[..<end.lowerBound])
-            } else {
-                tldrText = String(after)
-            }
-            let parsed = tldrText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !parsed.isEmpty {
-                document.tldr = parsed
-            }
+        if !parsed.sections.isEmpty || !document.sections.isEmpty {
+            document.sections = parsed.sections
         }
-
-        // Parse sections by ## headers
-        let lines = md.components(separatedBy: "\n")
-        var sections: [BriefingSection] = []
-        var currentTitle: String?
-        var currentContent: [String] = []
-
-        for line in lines {
-            if line.hasPrefix("## ") {
-                if let title = currentTitle {
-                    let content = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !content.isEmpty {
-                        sections.append(BriefingSection(title: title, content: content))
-                    }
-                }
-                currentTitle = String(line.dropFirst(3))
-                currentContent = []
-            } else if currentTitle != nil {
-                currentContent.append(line)
-            }
-        }
-        if let title = currentTitle {
-            let content = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !content.isEmpty {
-                sections.append(BriefingSection(title: title, content: content))
-            }
-        }
-
-        // Preserve identity for sections whose title+position haven't changed,
-        // so SwiftUI doesn't treat every streaming re-parse as a remove+insert.
-        for i in sections.indices {
-            if i < document.sections.count,
-               document.sections[i].title == sections[i].title {
-                sections[i] = BriefingSection(
-                    id: document.sections[i].id,
-                    title: sections[i].title,
-                    content: sections[i].content
-                )
-            }
-        }
-        document.sections = sections
     }
 
     private static func errorCategory(_ error: Error) -> String {

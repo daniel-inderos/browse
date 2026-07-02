@@ -74,12 +74,12 @@ The intent bar is the primary input surface. It accepts URLs, domains, search qu
 Briefings turn a natural-language question into an editorial research page.
 
 - Exa Search API fetches web sources and page content.
-- Claude streams a synthesized briefing from the retrieved sources.
-- The app parses streamed Markdown into:
+- Claude streams a synthesized briefing from the retrieved sources using
+  structured outputs, so the response is schema-guaranteed JSON.
+- A tolerant partial-JSON parser renders fields as they stream:
   - headline
   - TL;DR
-  - sections
-  - source citations
+  - sections (markdown with source citations)
 - Source citations use `cite://` links and resolve to the matching source.
 - Source shelf shows numbered source cards.
 - Image carousel shows source images when Exa returns image URLs.

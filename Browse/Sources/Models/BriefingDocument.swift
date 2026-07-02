@@ -22,6 +22,28 @@ struct BriefingDocument: Codable {
         self.isStreaming = false
         self.streamedMarkdown = ""
     }
+
+    /// Markdown representation of the parsed briefing, used as context for
+    /// follow-up prompts and chat tab mentions. `streamedMarkdown` holds the
+    /// raw model output (JSON for briefings generated via structured outputs,
+    /// markdown for documents persisted by older versions), so it is only
+    /// used as a fallback when no parsed fields are available.
+    var renderedMarkdown: String {
+        guard !headline.isEmpty || !sections.isEmpty else {
+            return streamedMarkdown
+        }
+        var parts: [String] = []
+        if !headline.isEmpty {
+            parts.append("# \(headline)")
+        }
+        if !tldr.isEmpty {
+            parts.append("**TL;DR:** \(tldr)")
+        }
+        for section in sections {
+            parts.append("## \(section.title)\n\(section.content)")
+        }
+        return parts.joined(separator: "\n\n")
+    }
 }
 
 struct BriefingSection: Identifiable, Codable {
