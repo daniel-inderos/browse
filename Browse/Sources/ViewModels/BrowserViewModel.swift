@@ -237,7 +237,7 @@ final class BrowserViewModel {
         refreshWorkspaces()
 
         if let state = persistenceStore.loadWorkspaceState(forWorkspaceID: id),
-           applyPersistedState(state) {
+           applyPersistedState(state.withRegeneratedTabIdentity()) {
             persistState()
         } else {
             resetInMemoryBrowsingState()
@@ -1206,6 +1206,9 @@ final class BrowserViewModel {
             loadStoredURLIfNeeded(for: activeTab)
         }
         syncChatPanePresentationForActiveTab()
+        if allowsStatePersistence {
+            workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
+        }
         return true
     }
 
@@ -1232,6 +1235,12 @@ final class BrowserViewModel {
         )
     }
 
+    /// Workspaces whose content this window has displayed or written. Only a
+    /// window that owned a workspace's content may clear its stored snapshot
+    /// when the state becomes empty — a fresh blank window sharing the
+    /// workspace must never erase it.
+    @ObservationIgnored private var workspaceIDsOwnedByThisWindow: Set<UUID> = []
+
     private func persistState() {
         guard allowsStatePersistence else { return }
         scheduledPersistStateTask?.cancel()
@@ -1251,13 +1260,25 @@ final class BrowserViewModel {
     }
 
     private func writePersistedState() {
-        persistenceStore.save(makePersistedState(), forWindowID: windowID, workspaceID: activeWorkspaceID)
+        let state = makePersistedState()
+        if state.isRestorableWindowState {
+            workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
+        }
+        persistenceStore.save(state, forWindowID: windowID, workspaceID: activeWorkspaceID)
         refreshWorkspaces()
     }
 
     private func saveCurrentWorkspaceState() {
         guard allowsStatePersistence else { return }
-        persistenceStore.save(makePersistedState(), forWindowID: windowID, workspaceID: activeWorkspaceID)
+        let state = makePersistedState()
+        if state.isRestorableWindowState {
+            workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
+        } else if workspaceIDsOwnedByThisWindow.contains(activeWorkspaceID) {
+            // This window owned the workspace's content and it is now empty —
+            // clear the snapshot so stale tabs don't resurface later.
+            persistenceStore.clearWorkspaceState(forWorkspaceID: activeWorkspaceID)
+        }
+        persistenceStore.save(state, forWindowID: windowID, workspaceID: activeWorkspaceID)
     }
 
     private func discardLiveTabsForWorkspaceSwitch() {

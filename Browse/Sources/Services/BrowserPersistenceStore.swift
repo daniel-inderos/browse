@@ -393,8 +393,12 @@ struct BrowserPersistenceStore {
         do {
             try withDatabase { database in
                 guard state.isRestorableWindowState else {
+                    // A blank window is not evidence that its workspace is
+                    // empty (a fresh Cmd-N window shares the last-opened
+                    // workspace), so only the window row is removed here.
+                    // Workspace snapshots are cleared explicitly via
+                    // clearWorkspaceState by the window that owns the content.
                     try deleteWindowState(forWindowID: windowID, in: database)
-                    try deleteWorkspaceState(forWorkspaceID: workspaceID, in: database)
                     return
                 }
                 let now = Date()
@@ -419,6 +423,16 @@ struct BrowserPersistenceStore {
             }
         } catch {
             persistenceLogger.error("Failed to save window state; category=\(Self.errorCategory(error), privacy: .public)")
+        }
+    }
+
+    func clearWorkspaceState(forWorkspaceID workspaceID: UUID) {
+        do {
+            try withDatabase { database in
+                try deleteWorkspaceState(forWorkspaceID: workspaceID, in: database)
+            }
+        } catch {
+            persistenceLogger.error("Failed to clear workspace state; category=\(Self.errorCategory(error), privacy: .public)")
         }
     }
 
@@ -1898,7 +1912,7 @@ private func columnOptionalDate(_ statement: OpaquePointer, at index: Int32) -> 
     return columnDate(statement, at: index)
 }
 
-private extension PersistedBrowserState {
+extension PersistedBrowserState {
     var isRestorableWindowState: Bool {
         tabs.contains { snapshot in
             switch snapshot.kind {
@@ -1910,6 +1924,63 @@ private extension PersistedBrowserState {
         }
     }
 
+    /// Returns a copy with freshly generated tab and tab-group identifiers.
+    /// Tab IDs are the primary key of the shared `tabs` table, so a workspace
+    /// snapshot applied to a second window must not reuse the IDs already
+    /// persisted by the first window — the insert would conflict and roll back
+    /// that window's entire persist transaction.
+    func withRegeneratedTabIdentity() -> PersistedBrowserState {
+        var groupIDMap: [UUID: UUID] = [:]
+        let regeneratedGroups = tabGroups.map { groups in
+            groups.map { group -> PersistedTabGroupSnapshot in
+                let newID = UUID()
+                groupIDMap[group.id] = newID
+                return PersistedTabGroupSnapshot(
+                    id: newID,
+                    title: group.title,
+                    isCollapsed: group.isCollapsed,
+                    createdAt: group.createdAt
+                )
+            }
+        }
+
+        var tabIDMap: [UUID: UUID] = [:]
+        let regeneratedTabs = tabs.map { tab -> PersistedTabSnapshot in
+            let newID = UUID()
+            tabIDMap[tab.id] = newID
+            return PersistedTabSnapshot(
+                id: newID,
+                kind: tab.kind,
+                title: tab.title,
+                url: tab.url,
+                groupID: tab.groupID.flatMap { groupIDMap[$0] },
+                navigationHistory: tab.navigationHistory,
+                navigationHistoryIndex: tab.navigationHistoryIndex,
+                pageZoom: tab.pageZoom,
+                isFavorite: tab.isFavorite,
+                isPinned: tab.isPinned,
+                createdAt: tab.createdAt,
+                lastAccessedAt: tab.lastAccessedAt,
+                briefing: tab.briefing
+            )
+        }
+
+        return PersistedBrowserState(
+            tabs: regeneratedTabs,
+            tabGroups: regeneratedGroups,
+            activeTabID: activeTabID.flatMap { tabIDMap[$0] },
+            isTabBarVisible: isTabBarVisible,
+            tabBarWidth: tabBarWidth,
+            chatPaneWidth: chatPaneWidth,
+            chatPaneHeight: chatPaneHeight,
+            chatPaneOffsetX: chatPaneOffsetX,
+            chatPaneOffsetY: chatPaneOffsetY,
+            pageChats: pageChats
+        )
+    }
+}
+
+private extension PersistedBrowserState {
     func clearingAIHistory() -> PersistedBrowserState {
         PersistedBrowserState(
             tabs: tabs.map { $0.clearingAIHistory() },

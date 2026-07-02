@@ -390,7 +390,11 @@ struct BrowserViewModelTests {
 
         viewModel.switchWorkspace(to: researchWorkspaceID)
         #expect(viewModel.activeWorkspaceID == researchWorkspaceID)
-        #expect(viewModel.activeTabID == researchTab.id)
+        // Tab IDs are regenerated when a workspace snapshot is applied (they
+        // are primary keys shared across windows), so the restored active tab
+        // is matched by content rather than identity.
+        let restoredActiveTab = try #require(viewModel.activeTab)
+        #expect(restoredActiveTab.url == URL(string: "https://example.com/research"))
         #expect(viewModel.tabs.first?.title == "Research Workspace")
     }
 
@@ -444,6 +448,86 @@ struct BrowserViewModelTests {
         #expect(persistedWorkspaces.map(\.id) == [defaultWorkspaceID])
         #expect(!persistedWorkspaces.contains { $0.id == deletedWorkspaceID })
         #expect(store.loadWorkspaceState(forWorkspaceID: deletedWorkspaceID) == nil)
+    }
+
+    @Test("Blank window sharing a workspace does not erase its snapshot")
+    func blankWindowSharingWorkspaceDoesNotEraseSnapshot() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let owner = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        let defaultWorkspaceID = owner.activeWorkspaceID
+
+        owner.createWorkspace(named: "Research")
+        let workspaceID = owner.activeWorkspaceID
+        let ownerTab = try #require(owner.activeTab)
+        ownerTab.title = "Paper"
+        ownerTab.url = URL(string: "https://example.com/paper")
+        owner.switchWorkspace(to: defaultWorkspaceID)
+        owner.switchWorkspace(to: workspaceID)
+        #expect(store.loadWorkspaceState(forWorkspaceID: workspaceID) != nil)
+
+        // A fresh window adopts the last-opened workspace with a blank tab.
+        // Its blank state must not delete the workspace's saved tabs — not on
+        // routine persists, and not when it switches away.
+        let blankWindow = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        #expect(blankWindow.activeWorkspaceID == workspaceID)
+        blankWindow.newTab()
+        #expect(store.loadWorkspaceState(forWorkspaceID: workspaceID) != nil)
+        blankWindow.switchWorkspace(to: defaultWorkspaceID)
+        #expect(store.loadWorkspaceState(forWorkspaceID: workspaceID) != nil)
+    }
+
+    @Test("Second window opening a workspace persists with regenerated tab IDs")
+    func secondWindowOpeningWorkspacePersistsWithRegeneratedTabIDs() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let first = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        let defaultWorkspaceID = first.activeWorkspaceID
+
+        first.createWorkspace(named: "Shared")
+        let workspaceID = first.activeWorkspaceID
+        let firstTab = try #require(first.activeTab)
+        firstTab.title = "Doc"
+        firstTab.url = URL(string: "https://example.com/shared")
+        first.switchWorkspace(to: defaultWorkspaceID)
+        first.switchWorkspace(to: workspaceID)
+        let firstLiveTabID = try #require(first.activeTab?.id)
+
+        // The first window still holds the workspace's tab rows. A second
+        // window opening the same workspace must persist under fresh tab IDs;
+        // reusing them would violate the tabs primary key and roll back the
+        // second window's entire persist transaction.
+        let second = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        second.switchWorkspace(to: defaultWorkspaceID)
+        second.switchWorkspace(to: workspaceID)
+
+        let secondTabID = try #require(second.activeTab?.id)
+        #expect(secondTabID != firstLiveTabID)
+        let snapshot = try #require(store.loadWorkspaceState(forWorkspaceID: workspaceID))
+        #expect(snapshot.tabs.map(\.id) == [secondTabID])
+        #expect(snapshot.tabs.first?.url == URL(string: "https://example.com/shared"))
     }
 
     @Test("Suggested workspace creation names and cycles in workspace order")
