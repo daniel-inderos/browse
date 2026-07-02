@@ -110,7 +110,15 @@ struct IntentBarViewModelTests {
         )
         viewModel.text = "swift tutorial"
 
-        try await Task.sleep(for: .milliseconds(450))
+        try await waitForRemoteAutocompleteSuggestions(
+            in: viewModel,
+            service: service,
+            expectedQueries: ["swift tutorial"],
+            expectedPrefix: [
+                "swift package manager",
+                "swift concurrency"
+            ]
+        )
 
         #expect(await service.requestedQueries() == ["swift tutorial"])
         #expect(Array(viewModel.autocompleteSuggestions.prefix(2)) == [
@@ -175,6 +183,24 @@ struct IntentBarViewModelTests {
             "cat examples",
             "cat near me"
         ])
+    }
+
+    private func waitForRemoteAutocompleteSuggestions(
+        in viewModel: IntentBarViewModel,
+        service: RecordingAutocompleteService,
+        expectedQueries: [String],
+        expectedPrefix: [String],
+        timeout: Duration = .seconds(3)
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            let requestedQueries = await service.requestedQueries()
+            let suggestionPrefix = Array(viewModel.autocompleteSuggestions.prefix(expectedPrefix.count))
+            if requestedQueries == expectedQueries, suggestionPrefix == expectedPrefix {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
     }
 }
 

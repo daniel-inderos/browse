@@ -75,6 +75,69 @@ struct DownloadManagerTests {
     }
 
     @MainActor
+    @Test("Persisted download items keep workspace association")
+    func persistedDownloadItemsKeepWorkspaceAssociation() throws {
+        let workspaceID = UUID()
+        let completed = DownloadItem(
+            filename: "workspace.txt",
+            sourceURL: URL(string: "https://example.com/file.txt"),
+            destinationURL: URL(filePath: "/tmp/workspace.txt"),
+            progress: 1,
+            state: .completed,
+            workspaceID: workspaceID
+        )
+
+        let persistedItems = DownloadManager.persistedDownloadItems(
+            from: [completed],
+            maxEntries: 1
+        )
+        let restoredItems = DownloadManager.restoredDownloadItems(from: persistedItems)
+
+        #expect(persistedItems.first?.workspaceID == workspaceID)
+        #expect(restoredItems.first?.workspaceID == workspaceID)
+    }
+
+    @Test("Download workspace labels resolve only for other existing workspaces")
+    func downloadWorkspaceLabelsResolveOnlyForOtherExistingWorkspaces() {
+        let activeWorkspaceID = BrowserPersistenceStore.defaultWorkspaceID
+        let otherWorkspaceID = UUID()
+        let deletedWorkspaceID = UUID()
+        let workspaces = [
+            makeWorkspace(id: activeWorkspaceID, name: "Default", isDefault: true),
+            makeWorkspace(id: otherWorkspaceID, name: "Research")
+        ]
+
+        #expect(
+            DownloadWorkspaceNameResolver.name(
+                for: nil,
+                activeWorkspaceID: activeWorkspaceID,
+                workspaces: workspaces
+            ) == nil
+        )
+        #expect(
+            DownloadWorkspaceNameResolver.name(
+                for: activeWorkspaceID,
+                activeWorkspaceID: activeWorkspaceID,
+                workspaces: workspaces
+            ) == nil
+        )
+        #expect(
+            DownloadWorkspaceNameResolver.name(
+                for: deletedWorkspaceID,
+                activeWorkspaceID: activeWorkspaceID,
+                workspaces: workspaces
+            ) == nil
+        )
+        #expect(
+            DownloadWorkspaceNameResolver.name(
+                for: otherWorkspaceID,
+                activeWorkspaceID: activeWorkspaceID,
+                workspaces: workspaces
+            ) == "Research"
+        )
+    }
+
+    @MainActor
     @Test("Restored downloads keep completed and failed entries without retry state")
     func restoredDownloadsKeepCompletedAndFailedEntriesWithoutRetryState() throws {
         let completedID = UUID()
@@ -82,6 +145,7 @@ struct DownloadManagerTests {
         let restoredItems = DownloadManager.restoredDownloadItems(from: [
             PersistedDownloadItem(
                 id: completedID,
+                workspaceID: nil,
                 filename: "done.txt",
                 sourceURL: URL(string: "https://example.com"),
                 destinationURL: URL(filePath: "/tmp/done.txt"),
@@ -91,6 +155,7 @@ struct DownloadManagerTests {
             ),
             PersistedDownloadItem(
                 id: failedID,
+                workspaceID: nil,
                 filename: "failed.txt",
                 sourceURL: URL(string: "https://example.com"),
                 destinationURL: nil,
@@ -100,6 +165,7 @@ struct DownloadManagerTests {
             ),
             PersistedDownloadItem(
                 id: UUID(),
+                workspaceID: nil,
                 filename: "active.txt",
                 sourceURL: nil,
                 destinationURL: nil,
@@ -128,6 +194,7 @@ struct DownloadManagerTests {
         )
         let item = PersistedDownloadItem(
             id: UUID(),
+            workspaceID: UUID(),
             filename: "report.pdf",
             sourceURL: URL(string: "https://example.com"),
             destinationURL: URL(filePath: "/tmp/report.pdf"),
@@ -139,5 +206,22 @@ struct DownloadManagerTests {
         try store.save([item])
 
         #expect(store.load() == [item])
+    }
+
+    private func makeWorkspace(
+        id: UUID,
+        name: String,
+        isDefault: Bool = false
+    ) -> PersistedWorkspace {
+        PersistedWorkspace(
+            id: id,
+            name: name,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            lastOpenedAt: nil,
+            colorName: nil,
+            iconName: nil,
+            isDefault: isDefault
+        )
     }
 }

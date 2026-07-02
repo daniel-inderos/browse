@@ -12,6 +12,11 @@ struct TabBarView: View {
     @State private var pendingGroupTitle = ""
     @State private var isRenameGroupAlertPresented = false
     @State private var dropTargetGroupID: UUID?
+    @State private var workspaceIDBeingRenamed: UUID?
+    @State private var pendingWorkspaceName = ""
+    @State private var isRenameWorkspaceAlertPresented = false
+    @State private var pendingNewWorkspaceName = ""
+    @State private var isCreateWorkspaceAlertPresented = false
 
     // Row-height estimates (padding + content + spacing) used as swap thresholds.
     private let compactRowHeight: CGFloat = 26
@@ -133,87 +138,11 @@ struct TabBarView: View {
 
             Spacer(minLength: 0)
 
-            // New tab button — pinned at the bottom of the sidebar
-            HStack(spacing: 6) {
-                Button(action: { browserVM.newTab() }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("New Tab")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 32)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Color.primary.opacity(0.04))
-                    )
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Button(action: { browserVM.toggleDownloadsPanel() }) {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "arrow.down.circle")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(
-                                browserVM.isDownloadsPanelVisible
-                                    ? BrowseColor.accent
-                                    : Color.secondary
-                            )
-                            .frame(width: 34, height: 32)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(Color.primary.opacity(0.04))
-                            )
-                            .contentShape(Rectangle())
-
-                        if browserVM.downloadManager.activeCount > 0 {
-                            Circle()
-                                .fill(BrowseColor.accent)
-                                .frame(width: 7, height: 7)
-                                .offset(x: -7, y: 7)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Downloads")
-                .popover(
-                    isPresented: Binding(
-                        get: { browserVM.isDownloadsPanelVisible },
-                        set: { isPresented in
-                            if isPresented {
-                                browserVM.isDownloadsPanelVisible = true
-                            } else {
-                                browserVM.hideDownloadsPanel()
-                            }
-                        }
-                    ),
-                    arrowEdge: .trailing
-                ) {
-                    DownloadsPanelView(
-                        manager: browserVM.downloadManager,
-                        onClose: { browserVM.hideDownloadsPanel() }
-                    )
-                }
-
-                Button(action: { browserVM.createTabGroup() }) {
-                    Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 34, height: 32)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color.primary.opacity(0.04))
-                        )
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("New Folder")
+            if !browserVM.isPrivateBrowsing {
+                workspaceDock
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 10)
+
+            bottomToolbar
         }
         .background(BrowseColor.tabBarBackground)
         .alert("Rename Folder", isPresented: $isRenameGroupAlertPresented) {
@@ -226,9 +155,259 @@ struct TabBarView: View {
                 groupIDBeingRenamed = nil
             }
         }
+        .alert("Rename Workspace", isPresented: $isRenameWorkspaceAlertPresented) {
+            TextField("Workspace Name", text: $pendingWorkspaceName)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                if let workspaceIDBeingRenamed {
+                    browserVM.renameWorkspace(workspaceIDBeingRenamed, name: pendingWorkspaceName)
+                }
+                workspaceIDBeingRenamed = nil
+            }
+        }
+        .alert("New Workspace", isPresented: $isCreateWorkspaceAlertPresented) {
+            TextField("Workspace Name", text: $pendingNewWorkspaceName)
+            Button("Cancel", role: .cancel) {
+                pendingNewWorkspaceName = ""
+            }
+            Button("Create") {
+                let name = pendingNewWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+                browserVM.createWorkspace(named: name.isEmpty ? browserVM.suggestedWorkspaceName() : name)
+                pendingNewWorkspaceName = ""
+            }
+        }
     }
 
     // MARK: - Section Components
+
+    private var workspaceDock: some View {
+        HStack(spacing: 6) {
+            Menu {
+                Section("Switch Workspace") {
+                    ForEach(browserVM.workspaces) { workspace in
+                        Button {
+                            browserVM.switchWorkspace(to: workspace.id)
+                        } label: {
+                            Label(
+                                workspace.name,
+                                systemImage: workspace.id == browserVM.activeWorkspaceID
+                                    ? "checkmark.circle.fill"
+                                    : (workspace.iconName ?? "square.grid.2x2")
+                            )
+                        }
+                    }
+                }
+
+                Divider()
+
+                Button {
+                    beginCreatingWorkspace()
+                } label: {
+                    Label("New Workspace", systemImage: "plus")
+                }
+
+                if let activeWorkspace = browserVM.activeWorkspace {
+                    Section("Current Workspace") {
+                        Button {
+                            beginRenaming(activeWorkspace)
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+
+                        Button {
+                            browserVM.duplicateWorkspace(activeWorkspace.id)
+                        } label: {
+                            Label("Duplicate", systemImage: "doc.on.doc")
+                        }
+
+                        Button(role: .destructive) {
+                            browserVM.deleteWorkspace(activeWorkspace.id)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .disabled(activeWorkspace.isDefault)
+                    }
+                }
+            } label: {
+                workspacePill(browserVM.activeWorkspace)
+            }
+            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .help("Switch Workspace")
+
+            Button {
+                beginCreatingWorkspace()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.primary.opacity(0.045))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("New Workspace")
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 0.5)
+                .padding(.horizontal, 10)
+        }
+    }
+
+    private var bottomToolbar: some View {
+        HStack(spacing: 6) {
+            Button(action: { browserVM.newTab() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("New Tab")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: { browserVM.toggleDownloadsPanel() }) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(
+                            browserVM.isDownloadsPanelVisible
+                                ? BrowseColor.accent
+                                : Color.secondary
+                        )
+                        .frame(width: 34, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.04))
+                        )
+                        .contentShape(Rectangle())
+
+                    if browserVM.downloadManager.activeCount > 0 {
+                        Circle()
+                            .fill(BrowseColor.accent)
+                            .frame(width: 7, height: 7)
+                            .offset(x: -7, y: 7)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Downloads")
+            .popover(
+                isPresented: Binding(
+                    get: { browserVM.isDownloadsPanelVisible },
+                    set: { isPresented in
+                        if isPresented {
+                            browserVM.isDownloadsPanelVisible = true
+                        } else {
+                            browserVM.hideDownloadsPanel()
+                        }
+                    }
+                ),
+                arrowEdge: .trailing
+            ) {
+                DownloadsPanelView(
+                    manager: browserVM.downloadManager,
+                    activeWorkspaceID: browserVM.activeWorkspaceID,
+                    workspaces: browserVM.workspaces,
+                    onClose: { browserVM.hideDownloadsPanel() }
+                )
+            }
+
+            Button(action: { browserVM.createTabGroup() }) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("New Folder")
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 10)
+    }
+
+    private func workspacePill(_ workspace: PersistedWorkspace?) -> some View {
+        let accent = workspaceAccentColor(for: workspace)
+        return HStack(spacing: 7) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(accent.opacity(0.16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(accent.opacity(0.30), lineWidth: 0.7)
+                    )
+
+                Image(systemName: workspace?.iconName ?? "square.grid.2x2")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(accent)
+            }
+            .frame(width: 22, height: 22)
+
+            Text(workspace?.name ?? "Workspace")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 4)
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.primary.opacity(0.055))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.7)
+        )
+        .contentShape(Rectangle())
+    }
+
+    private func workspaceAccentColor(for workspace: PersistedWorkspace?) -> Color {
+        switch workspace?.colorName {
+        case "blue":
+            return .blue
+        case "green":
+            return .green
+        case "orange":
+            return .orange
+        case "pink":
+            return .pink
+        case "purple":
+            return .purple
+        case "teal":
+            return .teal
+        default:
+            return BrowseColor.accent
+        }
+    }
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
@@ -325,6 +504,17 @@ struct TabBarView: View {
         groupIDBeingRenamed = group.id
         pendingGroupTitle = group.title
         isRenameGroupAlertPresented = true
+    }
+
+    private func beginRenaming(_ workspace: PersistedWorkspace) {
+        workspaceIDBeingRenamed = workspace.id
+        pendingWorkspaceName = workspace.name
+        isRenameWorkspaceAlertPresented = true
+    }
+
+    private func beginCreatingWorkspace() {
+        pendingNewWorkspaceName = browserVM.suggestedWorkspaceName()
+        isCreateWorkspaceAlertPresented = true
     }
 
     private func draggedTabID(from items: [String]) -> UUID? {

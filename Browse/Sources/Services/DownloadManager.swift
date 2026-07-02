@@ -20,6 +20,7 @@ final class DownloadItem: Identifiable, @unchecked Sendable {
     var state: DownloadState
     var errorSummary: String?
     var isRetryAvailable: Bool
+    var workspaceID: UUID?
 
     init(
         id: UUID = UUID(),
@@ -29,7 +30,8 @@ final class DownloadItem: Identifiable, @unchecked Sendable {
         progress: Double = 0,
         state: DownloadState = .waiting,
         errorSummary: String? = nil,
-        isRetryAvailable: Bool = false
+        isRetryAvailable: Bool = false,
+        workspaceID: UUID? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -39,6 +41,7 @@ final class DownloadItem: Identifiable, @unchecked Sendable {
         self.state = state
         self.errorSummary = errorSummary
         self.isRetryAvailable = isRetryAvailable
+        self.workspaceID = workspaceID
     }
 
     var isActive: Bool {
@@ -103,6 +106,7 @@ struct DownloadDestinationResolver {
 
 struct PersistedDownloadItem: Codable, Equatable {
     let id: UUID
+    let workspaceID: UUID?
     let filename: String
     let sourceURL: URL?
     let destinationURL: URL?
@@ -209,11 +213,17 @@ final class DownloadManager: NSObject {
         downloads.contains { $0.state == .completed }
     }
 
-    func begin(_ download: WKDownload, sourceURL: URL? = nil, item existingItem: DownloadItem? = nil) {
+    func begin(
+        _ download: WKDownload,
+        sourceURL: URL? = nil,
+        workspaceID: UUID? = nil,
+        item existingItem: DownloadItem? = nil
+    ) {
         let item = existingItem ?? DownloadItem(
             filename: filename(from: sourceURL ?? download.originalRequest?.url),
             sourceURL: sourceURL ?? download.originalRequest?.url,
-            state: .waiting
+            state: .waiting,
+            workspaceID: workspaceID
         )
 
         if existingItem == nil {
@@ -221,6 +231,7 @@ final class DownloadManager: NSObject {
         }
 
         item.sourceURL = item.sourceURL ?? sourceURL ?? download.originalRequest?.url
+        item.workspaceID = item.workspaceID ?? workspaceID
         item.state = .waiting
         item.progress = 0
         item.errorSummary = nil
@@ -249,12 +260,12 @@ final class DownloadManager: NSObject {
             resumeDataByItemID[item.id] = nil
             webView.resumeDownload(fromResumeData: resumeData) { [weak self, weak item] download in
                 guard let self, let item else { return }
-                self.begin(download, sourceURL: item.sourceURL, item: item)
+                self.begin(download, sourceURL: item.sourceURL, workspaceID: item.workspaceID, item: item)
             }
         } else if let sourceURL = item.sourceURL {
             webView.startDownload(using: URLRequest(url: sourceURL)) { [weak self, weak item] download in
                 guard let self, let item else { return }
-                self.begin(download, sourceURL: sourceURL, item: item)
+                self.begin(download, sourceURL: sourceURL, workspaceID: item.workspaceID, item: item)
             }
         } else {
             item.state = .failed
@@ -303,6 +314,7 @@ final class DownloadManager: NSObject {
                 .map { item in
                     PersistedDownloadItem(
                         id: item.id,
+                        workspaceID: item.workspaceID,
                         filename: item.filename,
                         sourceURL: persistedSourceURL(from: item.sourceURL),
                         destinationURL: item.destinationURL,
@@ -326,7 +338,8 @@ final class DownloadManager: NSObject {
                     progress: persistedItem.state == .completed ? 1 : persistedItem.progress,
                     state: persistedItem.state,
                     errorSummary: persistedItem.errorSummary,
-                    isRetryAvailable: false
+                    isRetryAvailable: false,
+                    workspaceID: persistedItem.workspaceID
                 )
             }
     }

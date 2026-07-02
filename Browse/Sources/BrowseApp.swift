@@ -229,6 +229,28 @@ private struct BrowserCommands: Commands {
             .disabled(browserViewModel == nil)
         }
 
+        CommandMenu("Workspaces") {
+            Button("New Workspace") {
+                browserViewModel?.createWorkspaceWithSuggestedName()
+            }
+            .keyboardShortcut("n", modifiers: [.command, .control])
+            .disabled(browserViewModel?.isPrivateBrowsing != false)
+
+            Divider()
+
+            Button("Previous Workspace") {
+                browserViewModel?.selectPreviousWorkspace()
+            }
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+            .disabled(browserViewModel?.isPrivateBrowsing != false)
+
+            Button("Next Workspace") {
+                browserViewModel?.selectNextWorkspace()
+            }
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+            .disabled(browserViewModel?.isPrivateBrowsing != false)
+        }
+
         CommandMenu("Navigation") {
             Button("Reload") {
                 browserViewModel?.reloadActiveTab()

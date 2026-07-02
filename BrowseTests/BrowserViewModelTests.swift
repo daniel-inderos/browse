@@ -360,6 +360,192 @@ struct BrowserViewModelTests {
         #expect(restoredViewModel.chatViewModel?.conversationHistory.first?.content == "What changed?")
     }
 
+    @Test("Switching workspaces swaps visible tabs and restores active tab")
+    func switchingWorkspacesSwapsVisibleTabsAndRestoresActiveTab() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let viewModel = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        let defaultWorkspaceID = viewModel.activeWorkspaceID
+        let defaultTab = try #require(viewModel.activeTab)
+        defaultTab.title = "Default Workspace"
+        defaultTab.url = URL(string: "https://example.com/default")
+
+        viewModel.createWorkspace(named: "Research")
+        let researchWorkspaceID = viewModel.activeWorkspaceID
+        let researchTab = try #require(viewModel.activeTab)
+        researchTab.title = "Research Workspace"
+        researchTab.url = URL(string: "https://example.com/research")
+
+        viewModel.switchWorkspace(to: defaultWorkspaceID)
+        #expect(viewModel.activeWorkspaceID == defaultWorkspaceID)
+        #expect(viewModel.tabs.first?.title == "Default Workspace")
+
+        viewModel.switchWorkspace(to: researchWorkspaceID)
+        #expect(viewModel.activeWorkspaceID == researchWorkspaceID)
+        #expect(viewModel.activeTabID == researchTab.id)
+        #expect(viewModel.tabs.first?.title == "Research Workspace")
+    }
+
+    @Test("Deleting active workspace switches back to default")
+    func deletingActiveWorkspaceSwitchesBackToDefault() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let viewModel = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: BrowserPersistenceStore(directoryURL: directory)
+        )
+        let defaultWorkspaceID = viewModel.activeWorkspaceID
+
+        viewModel.createWorkspace(named: "Delete Me")
+        let deletedWorkspaceID = viewModel.activeWorkspaceID
+        viewModel.deleteWorkspace(deletedWorkspaceID)
+
+        #expect(viewModel.activeWorkspaceID == defaultWorkspaceID)
+        #expect(!viewModel.workspaces.contains { $0.id == deletedWorkspaceID })
+    }
+
+    @Test("Deleting active workspace with restorable tab does not resurrect it")
+    func deletingActiveWorkspaceWithRestorableTabDoesNotResurrectIt() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let viewModel = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        let defaultWorkspaceID = viewModel.activeWorkspaceID
+
+        viewModel.createWorkspace(named: "Delete Me")
+        let deletedWorkspaceID = viewModel.activeWorkspaceID
+        let tab = try #require(viewModel.activeTab)
+        tab.title = "Real Page"
+        tab.url = URL(string: "https://example.com/delete-me")
+
+        viewModel.deleteWorkspace(deletedWorkspaceID)
+
+        let persistedWorkspaces = store.loadWorkspaces()
+        #expect(viewModel.activeWorkspaceID == defaultWorkspaceID)
+        #expect(persistedWorkspaces.map(\.id) == [defaultWorkspaceID])
+        #expect(!persistedWorkspaces.contains { $0.id == deletedWorkspaceID })
+        #expect(store.loadWorkspaceState(forWorkspaceID: deletedWorkspaceID) == nil)
+    }
+
+    @Test("Suggested workspace creation names and cycles in workspace order")
+    func suggestedWorkspaceCreationNamesAndCyclesInWorkspaceOrder() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let viewModel = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: BrowserPersistenceStore(directoryURL: directory)
+        )
+
+        #expect(viewModel.suggestedWorkspaceName() == "Workspace")
+        viewModel.createWorkspaceWithSuggestedName()
+        let firstWorkspaceID = viewModel.activeWorkspaceID
+        #expect(viewModel.activeWorkspace?.name == "Workspace")
+        #expect(viewModel.suggestedWorkspaceName() == "Workspace 2")
+
+        viewModel.createWorkspaceWithSuggestedName()
+        #expect(viewModel.activeWorkspace?.name == "Workspace 2")
+
+        var orderedWorkspaceIDs = viewModel.workspaces.map(\.id)
+        let currentIndex = try #require(orderedWorkspaceIDs.firstIndex(of: viewModel.activeWorkspaceID))
+
+        viewModel.selectNextWorkspace()
+        #expect(viewModel.activeWorkspaceID == orderedWorkspaceIDs[(currentIndex + 1) % orderedWorkspaceIDs.count])
+
+        orderedWorkspaceIDs = viewModel.workspaces.map(\.id)
+        let nextIndex = try #require(orderedWorkspaceIDs.firstIndex(of: viewModel.activeWorkspaceID))
+        viewModel.selectPreviousWorkspace()
+        #expect(viewModel.activeWorkspaceID == orderedWorkspaceIDs[(nextIndex - 1 + orderedWorkspaceIDs.count) % orderedWorkspaceIDs.count])
+
+        orderedWorkspaceIDs = viewModel.workspaces.map(\.id)
+        viewModel.switchWorkspace(to: orderedWorkspaceIDs[0])
+        orderedWorkspaceIDs = viewModel.workspaces.map(\.id)
+        viewModel.selectPreviousWorkspace()
+        #expect(viewModel.activeWorkspaceID == orderedWorkspaceIDs.last)
+        #expect(viewModel.workspaces.contains { $0.id == firstWorkspaceID })
+    }
+
+    @Test("Reopening app restores the last active workspace")
+    func reopeningAppRestoresLastActiveWorkspace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let firstWindow = BrowserViewModel(
+            windowID: UUID(),
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+
+        firstWindow.createWorkspace(named: "Launch Me")
+        let workspaceID = firstWindow.activeWorkspaceID
+        let tab = try #require(firstWindow.activeTab)
+        tab.title = "Launch Workspace"
+        tab.url = URL(string: "https://example.com/launch")
+        firstWindow.togglePin(tab.id)
+
+        let reopenedWindow = BrowserViewModel(
+            windowID: UUID(),
+            persistenceStore: store
+        )
+
+        #expect(reopenedWindow.activeWorkspaceID == workspaceID)
+        #expect(reopenedWindow.activeWorkspace?.name == "Launch Me")
+        #expect(reopenedWindow.tabs.first?.title == "Launch Workspace")
+    }
+
+    @Test("Private browsing excludes workspace persistence")
+    func privateBrowsingExcludesWorkspacePersistence() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        let viewModel = BrowserViewModel(
+            windowID: windowID,
+            isPrivateBrowsing: true,
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        let tab = try #require(viewModel.activeTab)
+        tab.url = URL(string: "https://example.com/private")
+
+        viewModel.createWorkspace(named: "Private")
+        viewModel.switchWorkspace(to: BrowserPersistenceStore.defaultWorkspaceID)
+
+        #expect(viewModel.workspaces.isEmpty)
+        #expect(store.loadWindowState(forWindowID: windowID) == nil)
+        #expect(store.workspaceID(forWindowID: windowID) == nil)
+    }
+
     private func makeViewModel() -> BrowserViewModel {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
