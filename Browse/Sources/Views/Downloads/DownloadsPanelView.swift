@@ -2,6 +2,8 @@ import SwiftUI
 
 struct DownloadsPanelView: View {
     let manager: DownloadManager
+    let activeWorkspaceID: UUID
+    let workspaces: [PersistedWorkspace]
     let onClose: () -> Void
 
     var body: some View {
@@ -16,7 +18,15 @@ struct DownloadsPanelView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(manager.downloads) { item in
-                            DownloadRowView(item: item, manager: manager)
+                            DownloadRowView(
+                                item: item,
+                                manager: manager,
+                                workspaceName: DownloadWorkspaceNameResolver.name(
+                                    for: item.workspaceID,
+                                    activeWorkspaceID: activeWorkspaceID,
+                                    workspaces: workspaces
+                                )
+                            )
 
                             if item.id != manager.downloads.last?.id {
                                 Divider()
@@ -92,6 +102,7 @@ struct DownloadsPanelView: View {
 private struct DownloadRowView: View {
     let item: DownloadItem
     let manager: DownloadManager
+    let workspaceName: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -111,6 +122,13 @@ private struct DownloadRowView: View {
 
                     if let sourceHost = item.sourceURL?.displayHost {
                         Text(sourceHost)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+
+                    if let workspaceName {
+                        Text(workspaceName)
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
@@ -235,5 +253,16 @@ private struct DownloadRowView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(help)
+    }
+}
+
+struct DownloadWorkspaceNameResolver {
+    static func name(
+        for workspaceID: UUID?,
+        activeWorkspaceID: UUID,
+        workspaces: [PersistedWorkspace]
+    ) -> String? {
+        guard let workspaceID, workspaceID != activeWorkspaceID else { return nil }
+        return workspaces.first { $0.id == workspaceID }?.name
     }
 }

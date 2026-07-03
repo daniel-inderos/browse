@@ -212,6 +212,7 @@ final class WebTabViewModel: NSObject {
     private(set) var webView: WKWebView
     private let downloadManager: DownloadManager
     private let isPrivateBrowsing: Bool
+    private let workspaceIDProvider: @MainActor () -> UUID?
     private let sitePermissionStore: SitePermissionStore
     private var observations: [NSKeyValueObservation] = []
     private(set) var scrollOffsetY: CGFloat = 0
@@ -235,6 +236,7 @@ final class WebTabViewModel: NSObject {
         websiteDataStore: WKWebsiteDataStore = .default(),
         downloadManager: DownloadManager = .shared,
         isPrivateBrowsing: Bool = false,
+        workspaceIDProvider: @escaping @MainActor () -> UUID? = { nil },
         sitePermissionStore: SitePermissionStore = .shared
     ) {
         let config = WKWebViewConfiguration()
@@ -270,6 +272,7 @@ final class WebTabViewModel: NSObject {
         self.webView = BrowserWebView(frame: .zero, configuration: config)
         self.downloadManager = downloadManager
         self.isPrivateBrowsing = isPrivateBrowsing
+        self.workspaceIDProvider = workspaceIDProvider
         self.sitePermissionStore = sitePermissionStore
         super.init()
 
@@ -679,8 +682,12 @@ final class WebTabViewModel: NSObject {
     private func downloadLinkedFile(_ url: URL) {
         webView.startDownload(using: URLRequest(url: url)) { [weak self] download in
             guard let self else { return }
-            self.downloadManager.begin(download, sourceURL: url)
+            self.downloadManager.begin(download, sourceURL: url, workspaceID: self.downloadWorkspaceID)
         }
+    }
+
+    private var downloadWorkspaceID: UUID? {
+        isPrivateBrowsing ? nil : workspaceIDProvider()
     }
 
     private func refreshCurrentSitePermissionEntries() {
@@ -1174,7 +1181,11 @@ extension WebTabViewModel: WKNavigationDelegate {
         navigationAction: WKNavigationAction,
         didBecome download: WKDownload
     ) {
-        downloadManager.begin(download, sourceURL: navigationAction.request.url)
+        downloadManager.begin(
+            download,
+            sourceURL: navigationAction.request.url,
+            workspaceID: downloadWorkspaceID
+        )
     }
 
     func webView(
@@ -1182,7 +1193,11 @@ extension WebTabViewModel: WKNavigationDelegate {
         navigationResponse: WKNavigationResponse,
         didBecome download: WKDownload
     ) {
-        downloadManager.begin(download, sourceURL: navigationResponse.response.url)
+        downloadManager.begin(
+            download,
+            sourceURL: navigationResponse.response.url,
+            workspaceID: downloadWorkspaceID
+        )
     }
 }
 

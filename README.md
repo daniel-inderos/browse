@@ -74,12 +74,12 @@ The intent bar is the primary input surface. It accepts URLs, domains, search qu
 Briefings turn a natural-language question into an editorial research page.
 
 - Exa Search API fetches web sources and page content.
-- Claude streams a synthesized briefing from the retrieved sources.
-- The app parses streamed Markdown into:
+- Claude streams a synthesized briefing from the retrieved sources using
+  structured outputs, so the response is schema-guaranteed JSON.
+- A tolerant partial-JSON parser renders fields as they stream:
   - headline
   - TL;DR
-  - sections
-  - source citations
+  - sections (markdown with source citations)
 - Source citations use `cite://` links and resolve to the matching source.
 - Source shelf shows numbered source cards.
 - Image carousel shows source images when Exa returns image URLs.
@@ -296,6 +296,9 @@ API keys still come from `.env` or the launch environment because they are app c
 | Cmd-T | New tab |
 | Cmd-W | Close active tab, or close window when no tab is active |
 | Cmd-Shift-T | Reopen closed tab |
+| Cmd-Ctrl-N | New workspace |
+| Cmd-Ctrl-Left | Previous workspace |
+| Cmd-Ctrl-Right | Next workspace |
 | Cmd-1 through Cmd-8 | Select tab by visible sidebar order |
 | Cmd-9 | Select last tab by visible sidebar order |
 | Cmd-Option-Left | Previous tab |
@@ -483,6 +486,10 @@ Normal windows persist:
 - chat pane width, height, and offset
 - page chat snapshots
 
+Project workspaces are persisted normal browsing contexts. Each workspace has a name, creation/update timestamps, last-opened time, and optional icon/color metadata. Workspace state includes the workspace's tabs, tab groups, active tab, pinned/favorite state, briefing tabs, page chat snapshots, and chat pane geometry. Download history entries started from normal windows keep the originating workspace ID where available. The bottom sidebar space switcher can create, rename, delete, switch, and duplicate workspaces.
+
+Switching workspaces saves the current workspace state and replaces the visible tab set with the selected workspace state. Browse remembers the last active workspace and reopens into it on the next launch when there is no more specific restored window workspace. Intent-bar suggestions based on open tabs, recent briefing tabs, page chat history, and chat tab mentions come from the active workspace's in-memory state. Existing persisted windows are associated with the default workspace during SQLite migration so current session restore behavior is preserved.
+
 Blank new-tab-only windows are not restorable. Closed normal windows are removed from the restore list unless the app is terminating. On termination, Browse prunes stored windows to the currently open normal windows.
 
 Page chat snapshots are keyed by normalized URL. URL fragments are ignored, schemes and hosts are lowercased, and default ports are removed. Browse keeps up to 120 persisted page chat snapshots. Existing `browser-session.json` and `browser-state.json` files are imported into SQLite on first use.
@@ -491,7 +498,7 @@ Settings includes controls to clear normal browsing data, clear AI history, and 
 
 ### Private Browsing Behavior
 
-Private windows do not persist browser state, recently closed tabs, page chats, or WebKit website data. They keep local intent-bar suggestions, but remote Google autocomplete is disabled by default. They still use configured API keys from `.env` or the launch environment when the user invokes AI features.
+Private windows do not persist browser state, workspace state, recently closed tabs, page chats, or WebKit website data. They keep local intent-bar suggestions, but remote Google autocomplete is disabled by default. They still use configured API keys from `.env` or the launch environment when the user invokes AI features.
 
 By default, private windows avoid optional third-party visual lookups. Favicons are fetched directly from likely favicon URLs or from the visited site's `/favicon.ico`; Browse does not send page domains to Google's S2 favicon endpoint unless "Use Google favicon service in private windows" is enabled in Settings. Briefing source image cards render generated placeholders by default in private windows; enabling "Load briefing images in private windows" lets those remote source image URLs load as the briefing page appears.
 

@@ -89,6 +89,25 @@ struct BrowserPersistenceStoreTests {
         #expect(state.tabs.first { $0.kind == .briefing }?.briefing?.conversationHistory.isEmpty == true)
     }
 
+    @Test("clears AI history from workspace states")
+    func clearsAIHistoryFromWorkspaceStates() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let workspace = store.createWorkspace(name: "AI")
+        store.save(makeStateWithAIHistory(), forWindowID: UUID(), workspaceID: workspace.id)
+
+        try store.clearAIHistory()
+
+        let state = try #require(store.loadWorkspaceState(forWorkspaceID: workspace.id))
+        #expect(state.pageChats == nil)
+        #expect(state.tabs.first { $0.kind == .briefing }?.briefing?.conversationHistory.isEmpty == true)
+    }
+
     @Test("saves session data in SQLite")
     func savesSessionDataInSQLite() throws {
         let directory = FileManager.default.temporaryDirectory
@@ -154,6 +173,78 @@ struct BrowserPersistenceStoreTests {
         #expect(state.tabs.count == 2)
         #expect(state.pageChats?.first?.conversationHistory.first?.content == "Question")
         #expect(state.tabs.first { $0.kind == .briefing }?.briefing?.conversationHistory.first?.content == "Question")
+    }
+
+    @Test("creates default workspace and associates existing windows")
+    func createsDefaultWorkspaceAndAssociatesExistingWindows() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        let state = makeState(tabTitle: "Workspace", url: URL(string: "https://example.com/workspace"))
+
+        store.save(state, forWindowID: windowID)
+
+        let workspaces = store.loadWorkspaces()
+        #expect(workspaces.count == 1)
+        #expect(workspaces.first?.isDefault == true)
+        #expect(store.workspaceID(forWindowID: windowID) == BrowserPersistenceStore.defaultWorkspaceID)
+        #expect(store.loadWorkspaceState(forWorkspaceID: BrowserPersistenceStore.defaultWorkspaceID)?.tabs.first?.title == "Workspace")
+    }
+
+    @Test("saves independent workspace states")
+    func savesIndependentWorkspaceStates() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        let first = store.createWorkspace(name: "First")
+        let second = store.createWorkspace(name: "Second")
+
+        store.save(
+            makeState(tabTitle: "First", url: URL(string: "https://example.com/first")),
+            forWindowID: windowID,
+            workspaceID: first.id
+        )
+        store.save(
+            makeState(tabTitle: "Second", url: URL(string: "https://example.com/second")),
+            forWindowID: windowID,
+            workspaceID: second.id
+        )
+
+        #expect(store.loadWorkspaceState(forWorkspaceID: first.id)?.tabs.first?.title == "First")
+        #expect(store.loadWorkspaceState(forWorkspaceID: second.id)?.tabs.first?.title == "Second")
+    }
+
+    @Test("deleting a workspace preserves default workspace")
+    func deletingWorkspacePreservesDefaultWorkspace() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let workspace = store.createWorkspace(name: "Temporary")
+        store.save(
+            makeState(tabTitle: "Temporary", url: URL(string: "https://example.com/temp")),
+            forWindowID: UUID(),
+            workspaceID: workspace.id
+        )
+
+        store.deleteWorkspace(workspace.id)
+
+        #expect(!store.loadWorkspaces().contains { $0.id == workspace.id })
+        #expect(store.loadWorkspaceState(forWorkspaceID: workspace.id) == nil)
+        #expect(store.loadWorkspaces().contains { $0.id == BrowserPersistenceStore.defaultWorkspaceID })
     }
 
     @Test("clears persisted browsing data files")

@@ -120,9 +120,22 @@ struct PersistedBrowserWindowSession: Codable {
     let windows: [PersistedBrowserWindowSnapshot]
 }
 
+struct PersistedWorkspace: Codable, Identifiable, Equatable {
+    let id: UUID
+    var name: String
+    let createdAt: Date
+    var updatedAt: Date
+    var lastOpenedAt: Date?
+    var colorName: String?
+    var iconName: String?
+    var isDefault: Bool
+}
+
 struct BrowserPersistenceStore {
     private static let legacyJSONMigrationKey = "legacy-json-migrated"
+    private static let lastOpenedWorkspaceIDKey = "last-opened-workspace-id"
     private static let legacyStateWindowID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    static let defaultWorkspaceID = UUID(uuidString: "00000000-0000-0000-0000-000000000010")!
 
     private let fileManager = FileManager.default
     private let fileURL: URL
@@ -174,17 +187,252 @@ struct BrowserPersistenceStore {
         }
     }
 
+    func workspaceID(forWindowID windowID: UUID) -> UUID? {
+        do {
+            return try withDatabase { database in
+                try loadWorkspaceID(forWindowID: windowID, in: database)
+            }
+        } catch {
+            persistenceLogger.error("Failed to load window workspace id; category=\(Self.errorCategory(error), privacy: .public)")
+            return nil
+        }
+    }
+
+    func loadWorkspaces() -> [PersistedWorkspace] {
+        do {
+            return try withDatabase { database in
+                try ensureDefaultWorkspace(in: database)
+                return try loadWorkspaceRows(in: database)
+            }
+        } catch {
+            persistenceLogger.error("Failed to load workspaces; category=\(Self.errorCategory(error), privacy: .public)")
+            return [Self.defaultWorkspace()]
+        }
+    }
+
+    func loadWorkspaceState(forWorkspaceID workspaceID: UUID) -> PersistedBrowserState? {
+        do {
+            return try withDatabase { database in
+                try loadWorkspaceState(forWorkspaceID: workspaceID, in: database)
+            }
+        } catch {
+            persistenceLogger.error("Failed to load workspace state; category=\(Self.errorCategory(error), privacy: .public)")
+            return nil
+        }
+    }
+
+    func loadLastOpenedWorkspaceID() -> UUID? {
+        do {
+            return try withDatabase { database in
+                try metadataValue(forKey: Self.lastOpenedWorkspaceIDKey, in: database)
+                    .flatMap(UUID.init(uuidString:))
+            }
+        } catch {
+            persistenceLogger.error("Failed to load last workspace id; category=\(Self.errorCategory(error), privacy: .public)")
+            return nil
+        }
+    }
+
+    @discardableResult
+    func createWorkspace(
+        name: String,
+        colorName: String? = nil,
+        iconName: String? = nil,
+        state: PersistedBrowserState? = nil
+    ) -> PersistedWorkspace {
+        do {
+            return try withDatabase { database in
+                let now = Date()
+                let workspace = PersistedWorkspace(
+                    id: UUID(),
+                    name: Self.normalizedWorkspaceName(name, fallback: "New Workspace"),
+                    createdAt: now,
+                    updatedAt: now,
+                    lastOpenedAt: now,
+                    colorName: colorName,
+                    iconName: iconName,
+                    isDefault: false
+                )
+                try database.transaction {
+                    try insertWorkspace(workspace, in: database)
+                    if let state {
+                        try saveWorkspaceState(
+                            state,
+                            forWorkspaceID: workspace.id,
+                            updatedAt: now,
+                            in: database,
+                            beginsTransaction: false
+                        )
+                    }
+                }
+                return workspace
+            }
+        } catch {
+            persistenceLogger.error("Failed to create workspace; category=\(Self.errorCategory(error), privacy: .public)")
+            return Self.defaultWorkspace()
+        }
+    }
+
+    func renameWorkspace(_ workspaceID: UUID, name: String) {
+        do {
+            try withDatabase { database in
+                try database.prepare(
+                    "UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?"
+                ) { statement in
+                    try bindText(Self.normalizedWorkspaceName(name, fallback: "Workspace"), to: statement, at: 1, database: database)
+                    try bindDate(Date(), to: statement, at: 2, database: database)
+                    try bindText(workspaceID.uuidString, to: statement, at: 3, database: database)
+                    try stepDone(statement, database: database)
+                }
+            }
+        } catch {
+            persistenceLogger.error("Failed to rename workspace; category=\(Self.errorCategory(error), privacy: .public)")
+        }
+    }
+
+    func markWorkspaceOpened(_ workspaceID: UUID, forWindowID windowID: UUID) {
+        do {
+            try withDatabase { database in
+                try database.transaction {
+                    try ensureDefaultWorkspace(in: database)
+                    try database.prepare(
+                        "UPDATE workspaces SET last_opened_at = ?, updated_at = ? WHERE id = ?"
+                    ) { statement in
+                        let now = Date()
+                        try bindDate(now, to: statement, at: 1, database: database)
+                        try bindDate(now, to: statement, at: 2, database: database)
+                        try bindText(workspaceID.uuidString, to: statement, at: 3, database: database)
+                        try stepDone(statement, database: database)
+                    }
+                    try setWindowWorkspaceID(workspaceID, forWindowID: windowID, in: database)
+                    try setMetadataValue(workspaceID.uuidString, forKey: Self.lastOpenedWorkspaceIDKey, in: database)
+                }
+            }
+        } catch {
+            persistenceLogger.error("Failed to mark workspace opened; category=\(Self.errorCategory(error), privacy: .public)")
+        }
+    }
+
+    func deleteWorkspace(_ workspaceID: UUID) {
+        guard workspaceID != Self.defaultWorkspaceID else { return }
+        do {
+            try withDatabase { database in
+                try database.transaction {
+                    try database.prepare("DELETE FROM workspace_states WHERE workspace_id = ?") { statement in
+                        try bindText(workspaceID.uuidString, to: statement, at: 1, database: database)
+                        try stepDone(statement, database: database)
+                    }
+                    try database.prepare("DELETE FROM workspaces WHERE id = ? AND is_default = 0") { statement in
+                        try bindText(workspaceID.uuidString, to: statement, at: 1, database: database)
+                        try stepDone(statement, database: database)
+                    }
+                    try database.prepare("UPDATE windows SET workspace_id = ? WHERE workspace_id = ?") { statement in
+                        try bindText(Self.defaultWorkspaceID.uuidString, to: statement, at: 1, database: database)
+                        try bindText(workspaceID.uuidString, to: statement, at: 2, database: database)
+                        try stepDone(statement, database: database)
+                    }
+                    try database.prepare(
+                        "UPDATE window_workspace_selection SET workspace_id = ?, updated_at = ? WHERE workspace_id = ?"
+                    ) { statement in
+                        try bindText(Self.defaultWorkspaceID.uuidString, to: statement, at: 1, database: database)
+                        try bindDate(Date(), to: statement, at: 2, database: database)
+                        try bindText(workspaceID.uuidString, to: statement, at: 3, database: database)
+                        try stepDone(statement, database: database)
+                    }
+                }
+            }
+        } catch {
+            persistenceLogger.error("Failed to delete workspace; category=\(Self.errorCategory(error), privacy: .public)")
+        }
+    }
+
+    @discardableResult
+    func duplicateWorkspace(_ workspaceID: UUID, name: String? = nil) -> PersistedWorkspace? {
+        do {
+            return try withDatabase { database in
+                guard let source = try loadWorkspaceRows(in: database).first(where: { $0.id == workspaceID }) else {
+                    return nil
+                }
+                let state = try loadWorkspaceState(forWorkspaceID: workspaceID, in: database)
+                let now = Date()
+                let duplicate = PersistedWorkspace(
+                    id: UUID(),
+                    name: Self.normalizedWorkspaceName(name ?? "\(source.name) Copy", fallback: "Workspace Copy"),
+                    createdAt: now,
+                    updatedAt: now,
+                    lastOpenedAt: nil,
+                    colorName: source.colorName,
+                    iconName: source.iconName,
+                    isDefault: false
+                )
+                try database.transaction {
+                    try insertWorkspace(duplicate, in: database)
+                    if let state {
+                        try saveWorkspaceState(
+                            state,
+                            forWorkspaceID: duplicate.id,
+                            updatedAt: now,
+                            in: database,
+                            beginsTransaction: false
+                        )
+                    }
+                }
+                return duplicate
+            }
+        } catch {
+            persistenceLogger.error("Failed to duplicate workspace; category=\(Self.errorCategory(error), privacy: .public)")
+            return nil
+        }
+    }
+
     func save(_ state: PersistedBrowserState, forWindowID windowID: UUID) {
+        save(state, forWindowID: windowID, workspaceID: Self.defaultWorkspaceID)
+    }
+
+    func save(_ state: PersistedBrowserState, forWindowID windowID: UUID, workspaceID: UUID) {
         do {
             try withDatabase { database in
                 guard state.isRestorableWindowState else {
+                    // A blank window is not evidence that its workspace is
+                    // empty (a fresh Cmd-N window shares the last-opened
+                    // workspace), so only the window row is removed here.
+                    // Workspace snapshots are cleared explicitly via
+                    // clearWorkspaceState by the window that owns the content.
                     try deleteWindowState(forWindowID: windowID, in: database)
                     return
                 }
-                try saveWindowState(state, forWindowID: windowID, lastUpdatedAt: Date(), in: database)
+                let now = Date()
+                try database.transaction {
+                    try ensureWorkspaceExists(workspaceID, in: database)
+                    try saveWindowState(
+                        state,
+                        forWindowID: windowID,
+                        workspaceID: workspaceID,
+                        lastUpdatedAt: now,
+                        in: database,
+                        beginsTransaction: false
+                    )
+                    try saveWorkspaceState(
+                        state,
+                        forWorkspaceID: workspaceID,
+                        updatedAt: now,
+                        in: database,
+                        beginsTransaction: false
+                    )
+                }
             }
         } catch {
             persistenceLogger.error("Failed to save window state; category=\(Self.errorCategory(error), privacy: .public)")
+        }
+    }
+
+    func clearWorkspaceState(forWorkspaceID workspaceID: UUID) {
+        do {
+            try withDatabase { database in
+                try deleteWorkspaceState(forWorkspaceID: workspaceID, in: database)
+            }
+        } catch {
+            persistenceLogger.error("Failed to clear workspace state; category=\(Self.errorCategory(error), privacy: .public)")
         }
     }
 
@@ -255,12 +503,22 @@ struct BrowserPersistenceStore {
     func clearAIHistory() throws {
         try withDatabase { database in
             let snapshots = try loadWindowSnapshots(in: database)
+            let workspaceStates = try loadWorkspaceStateSnapshots(in: database)
             try database.transaction {
                 for snapshot in snapshots {
                     try saveWindowState(
                         snapshot.state.clearingAIHistory(),
                         forWindowID: snapshot.id,
                         lastUpdatedAt: snapshot.lastUpdatedAt,
+                        in: database,
+                        beginsTransaction: false
+                    )
+                }
+                for workspaceState in workspaceStates {
+                    try saveWorkspaceState(
+                        workspaceState.state.clearingAIHistory(),
+                        forWorkspaceID: workspaceState.workspaceID,
+                        updatedAt: workspaceState.updatedAt,
                         in: database,
                         beginsTransaction: false
                     )
@@ -281,6 +539,7 @@ struct BrowserPersistenceStore {
     func pruneBrowsingData(olderThan cutoff: Date) throws {
         try withDatabase { database in
             let snapshots = try loadWindowSnapshots(in: database)
+            let workspaceStates = try loadWorkspaceStateSnapshots(in: database)
             try database.transaction {
                 for snapshot in snapshots {
                     let state = snapshot.state.pruningBrowsingData(olderThan: cutoff)
@@ -296,6 +555,20 @@ struct BrowserPersistenceStore {
                         try deleteWindowState(forWindowID: snapshot.id, in: database)
                     }
                 }
+                for workspaceState in workspaceStates {
+                    let state = workspaceState.state.pruningBrowsingData(olderThan: cutoff)
+                    if state.isRestorableWindowState {
+                        try saveWorkspaceState(
+                            state,
+                            forWorkspaceID: workspaceState.workspaceID,
+                            updatedAt: workspaceState.updatedAt,
+                            in: database,
+                            beginsTransaction: false
+                        )
+                    } else {
+                        try deleteWorkspaceState(forWorkspaceID: workspaceState.workspaceID, in: database)
+                    }
+                }
             }
         }
     }
@@ -303,12 +576,22 @@ struct BrowserPersistenceStore {
     func pruneAIHistory(olderThan cutoff: Date) throws {
         try withDatabase { database in
             let snapshots = try loadWindowSnapshots(in: database)
+            let workspaceStates = try loadWorkspaceStateSnapshots(in: database)
             try database.transaction {
                 for snapshot in snapshots {
                     try saveWindowState(
                         snapshot.state.pruningAIHistory(olderThan: cutoff),
                         forWindowID: snapshot.id,
                         lastUpdatedAt: snapshot.lastUpdatedAt,
+                        in: database,
+                        beginsTransaction: false
+                    )
+                }
+                for workspaceState in workspaceStates {
+                    try saveWorkspaceState(
+                        workspaceState.state.pruningAIHistory(olderThan: cutoff),
+                        forWorkspaceID: workspaceState.workspaceID,
+                        updatedAt: workspaceState.updatedAt,
                         in: database,
                         beginsTransaction: false
                     )
@@ -341,6 +624,7 @@ struct BrowserPersistenceStore {
 
             CREATE TABLE IF NOT EXISTS windows (
                 id TEXT PRIMARY KEY,
+                workspace_id TEXT,
                 active_tab_id TEXT,
                 is_tab_bar_visible INTEGER NOT NULL,
                 tab_bar_width REAL NOT NULL,
@@ -349,6 +633,32 @@ struct BrowserPersistenceStore {
                 chat_pane_offset_x REAL,
                 chat_pane_offset_y REAL,
                 last_updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                last_opened_at REAL,
+                color_name TEXT,
+                icon_name TEXT,
+                is_default INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS workspaces_last_opened_idx
+            ON workspaces(last_opened_at DESC, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS workspace_states (
+                workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+                state_json TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS window_workspace_selection (
+                window_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                updated_at REAL NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS tab_groups (
@@ -431,6 +741,20 @@ struct BrowserPersistenceStore {
         if try !table("tabs", hasColumn: "page_zoom", in: database) {
             try database.execute("ALTER TABLE tabs ADD COLUMN page_zoom REAL")
         }
+        if try !table("windows", hasColumn: "workspace_id", in: database) {
+            try database.execute("ALTER TABLE windows ADD COLUMN workspace_id TEXT")
+        }
+        try ensureDefaultWorkspace(in: database)
+        try database.prepare("UPDATE windows SET workspace_id = ? WHERE workspace_id IS NULL") { statement in
+            try bindText(Self.defaultWorkspaceID.uuidString, to: statement, at: 1, database: database)
+            try stepDone(statement, database: database)
+        }
+        try database.execute(
+            """
+            INSERT OR IGNORE INTO window_workspace_selection (window_id, workspace_id, updated_at)
+            SELECT id, workspace_id, last_updated_at FROM windows WHERE workspace_id IS NOT NULL
+            """
+        )
     }
 
     private func table(_ tableName: String, hasColumn columnName: String, in database: SQLiteDatabase) throws -> Bool {
@@ -457,15 +781,31 @@ struct BrowserPersistenceStore {
                 try saveWindowState(
                     snapshot.state,
                     forWindowID: snapshot.id,
+                    workspaceID: Self.defaultWorkspaceID,
                     lastUpdatedAt: snapshot.lastUpdatedAt,
                     in: database
                 )
+                if try loadWorkspaceState(forWorkspaceID: Self.defaultWorkspaceID, in: database) == nil {
+                    try saveWorkspaceState(
+                        snapshot.state,
+                        forWorkspaceID: Self.defaultWorkspaceID,
+                        updatedAt: snapshot.lastUpdatedAt,
+                        in: database
+                    )
+                }
             }
         } else if let state = legacyState, state.isRestorableWindowState {
             try saveWindowState(
                 state,
                 forWindowID: legacyStateWindowID ?? Self.legacyStateWindowID,
+                workspaceID: Self.defaultWorkspaceID,
                 lastUpdatedAt: Date(),
+                in: database
+            )
+            try saveWorkspaceState(
+                state,
+                forWorkspaceID: Self.defaultWorkspaceID,
+                updatedAt: Date(),
                 in: database
             )
         }
@@ -491,6 +831,100 @@ struct BrowserPersistenceStore {
             }
         }
         return ids
+    }
+
+    private func loadWorkspaceID(forWindowID windowID: UUID, in database: SQLiteDatabase) throws -> UUID? {
+        var workspaceID: UUID?
+        try database.prepare("SELECT workspace_id FROM window_workspace_selection WHERE window_id = ?") { statement in
+            try bindText(windowID.uuidString, to: statement, at: 1, database: database)
+            if try stepRow(statement, database: database),
+               let idString = columnText(statement, at: 0) {
+                workspaceID = UUID(uuidString: idString)
+            }
+        }
+        if workspaceID != nil {
+            return workspaceID
+        }
+        try database.prepare("SELECT workspace_id FROM windows WHERE id = ?") { statement in
+            try bindText(windowID.uuidString, to: statement, at: 1, database: database)
+            if try stepRow(statement, database: database),
+               let idString = columnText(statement, at: 0) {
+                workspaceID = UUID(uuidString: idString)
+            }
+        }
+        return workspaceID
+    }
+
+    private func loadWorkspaceRows(in database: SQLiteDatabase) throws -> [PersistedWorkspace] {
+        var workspaces: [PersistedWorkspace] = []
+        try database.prepare(
+            """
+            SELECT id, name, created_at, updated_at, last_opened_at, color_name, icon_name, is_default
+            FROM workspaces
+            ORDER BY is_default DESC, COALESCE(last_opened_at, updated_at) DESC, name ASC
+            """
+        ) { statement in
+            while try stepRow(statement, database: database) {
+                guard let idString = columnText(statement, at: 0),
+                      let id = UUID(uuidString: idString) else {
+                    continue
+                }
+                workspaces.append(
+                    PersistedWorkspace(
+                        id: id,
+                        name: columnText(statement, at: 1) ?? "Workspace",
+                        createdAt: columnDate(statement, at: 2),
+                        updatedAt: columnDate(statement, at: 3),
+                        lastOpenedAt: columnOptionalDate(statement, at: 4),
+                        colorName: columnText(statement, at: 5),
+                        iconName: columnText(statement, at: 6),
+                        isDefault: columnBool(statement, at: 7)
+                    )
+                )
+            }
+        }
+        return workspaces
+    }
+
+    private func loadWorkspaceState(forWorkspaceID workspaceID: UUID, in database: SQLiteDatabase) throws -> PersistedBrowserState? {
+        var stateJSON: String?
+        try database.prepare("SELECT state_json FROM workspace_states WHERE workspace_id = ?") { statement in
+            try bindText(workspaceID.uuidString, to: statement, at: 1, database: database)
+            if try stepRow(statement, database: database) {
+                stateJSON = columnText(statement, at: 0)
+            }
+        }
+        return try stateJSON.map { try decodeJSON(PersistedBrowserState.self, from: $0) }
+    }
+
+    private func loadWorkspaceStateSnapshots(in database: SQLiteDatabase) throws -> [PersistedWorkspaceStateSnapshot] {
+        var rows: [(workspaceID: UUID, stateJSON: String, updatedAt: Date)] = []
+        try database.prepare(
+            "SELECT workspace_id, state_json, updated_at FROM workspace_states"
+        ) { statement in
+            while try stepRow(statement, database: database) {
+                guard let idString = columnText(statement, at: 0),
+                      let workspaceID = UUID(uuidString: idString),
+                      let stateJSON = columnText(statement, at: 1) else {
+                    continue
+                }
+                rows.append(
+                    (
+                        workspaceID: workspaceID,
+                        stateJSON: stateJSON,
+                        updatedAt: columnDate(statement, at: 2)
+                    )
+                )
+            }
+        }
+
+        return try rows.map { row in
+            PersistedWorkspaceStateSnapshot(
+                workspaceID: row.workspaceID,
+                state: try decodeJSON(PersistedBrowserState.self, from: row.stateJSON),
+                updatedAt: row.updatedAt
+            )
+        }
     }
 
     private func loadWindowSnapshots(in database: SQLiteDatabase) throws -> [PersistedBrowserWindowSnapshot] {
@@ -770,13 +1204,20 @@ struct BrowserPersistenceStore {
     private func saveWindowState(
         _ state: PersistedBrowserState,
         forWindowID windowID: UUID,
+        workspaceID: UUID = Self.defaultWorkspaceID,
         lastUpdatedAt: Date,
         in database: SQLiteDatabase,
         beginsTransaction: Bool = true
     ) throws {
         let work = {
             try deleteWindowState(forWindowID: windowID, in: database)
-            try insertWindowState(state, forWindowID: windowID, lastUpdatedAt: lastUpdatedAt, in: database)
+            try insertWindowState(
+                state,
+                forWindowID: windowID,
+                workspaceID: workspaceID,
+                lastUpdatedAt: lastUpdatedAt,
+                in: database
+            )
         }
 
         if beginsTransaction {
@@ -789,27 +1230,29 @@ struct BrowserPersistenceStore {
     private func insertWindowState(
         _ state: PersistedBrowserState,
         forWindowID windowID: UUID,
+        workspaceID: UUID,
         lastUpdatedAt: Date,
         in database: SQLiteDatabase
     ) throws {
         try database.prepare(
             """
             INSERT INTO windows (
-                id, active_tab_id, is_tab_bar_visible, tab_bar_width, chat_pane_width,
+                id, workspace_id, active_tab_id, is_tab_bar_visible, tab_bar_width, chat_pane_width,
                 chat_pane_height, chat_pane_offset_x, chat_pane_offset_y, last_updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         ) { statement in
             try bindText(windowID.uuidString, to: statement, at: 1, database: database)
-            try bindText(state.activeTabID?.uuidString, to: statement, at: 2, database: database)
-            try bindBool(state.isTabBarVisible, to: statement, at: 3, database: database)
-            try bindDouble(state.tabBarWidth, to: statement, at: 4, database: database)
-            try bindOptionalDouble(state.chatPaneWidth, to: statement, at: 5, database: database)
-            try bindOptionalDouble(state.chatPaneHeight, to: statement, at: 6, database: database)
-            try bindOptionalDouble(state.chatPaneOffsetX, to: statement, at: 7, database: database)
-            try bindOptionalDouble(state.chatPaneOffsetY, to: statement, at: 8, database: database)
-            try bindDate(lastUpdatedAt, to: statement, at: 9, database: database)
+            try bindText(workspaceID.uuidString, to: statement, at: 2, database: database)
+            try bindText(state.activeTabID?.uuidString, to: statement, at: 3, database: database)
+            try bindBool(state.isTabBarVisible, to: statement, at: 4, database: database)
+            try bindDouble(state.tabBarWidth, to: statement, at: 5, database: database)
+            try bindOptionalDouble(state.chatPaneWidth, to: statement, at: 6, database: database)
+            try bindOptionalDouble(state.chatPaneHeight, to: statement, at: 7, database: database)
+            try bindOptionalDouble(state.chatPaneOffsetX, to: statement, at: 8, database: database)
+            try bindOptionalDouble(state.chatPaneOffsetY, to: statement, at: 9, database: database)
+            try bindDate(lastUpdatedAt, to: statement, at: 10, database: database)
             try stepDone(statement, database: database)
         }
 
@@ -978,6 +1421,146 @@ struct BrowserPersistenceStore {
         }
     }
 
+    private func saveWorkspaceState(
+        _ state: PersistedBrowserState,
+        forWorkspaceID workspaceID: UUID,
+        updatedAt: Date,
+        in database: SQLiteDatabase,
+        beginsTransaction: Bool = true
+    ) throws {
+        let work = {
+            try ensureWorkspaceExists(workspaceID, in: database)
+            try database.prepare(
+                """
+                INSERT OR REPLACE INTO workspace_states (workspace_id, state_json, updated_at)
+                VALUES (?, ?, ?)
+                """
+            ) { statement in
+                try bindText(workspaceID.uuidString, to: statement, at: 1, database: database)
+                try bindText(try encodeJSON(state), to: statement, at: 2, database: database)
+                try bindDate(updatedAt, to: statement, at: 3, database: database)
+                try stepDone(statement, database: database)
+            }
+            try database.prepare("UPDATE workspaces SET updated_at = ? WHERE id = ?") { statement in
+                try bindDate(updatedAt, to: statement, at: 1, database: database)
+                try bindText(workspaceID.uuidString, to: statement, at: 2, database: database)
+                try stepDone(statement, database: database)
+            }
+        }
+
+        if beginsTransaction {
+            try database.transaction(work)
+        } else {
+            try work()
+        }
+    }
+
+    private func deleteWorkspaceState(forWorkspaceID workspaceID: UUID, in database: SQLiteDatabase) throws {
+        try database.prepare("DELETE FROM workspace_states WHERE workspace_id = ?") { statement in
+            try bindText(workspaceID.uuidString, to: statement, at: 1, database: database)
+            try stepDone(statement, database: database)
+        }
+    }
+
+    private func insertWorkspace(_ workspace: PersistedWorkspace, in database: SQLiteDatabase) throws {
+        try database.prepare(
+            """
+            INSERT OR REPLACE INTO workspaces (
+                id, name, created_at, updated_at, last_opened_at, color_name, icon_name, is_default
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+        ) { statement in
+            try bindText(workspace.id.uuidString, to: statement, at: 1, database: database)
+            try bindText(workspace.name, to: statement, at: 2, database: database)
+            try bindDate(workspace.createdAt, to: statement, at: 3, database: database)
+            try bindDate(workspace.updatedAt, to: statement, at: 4, database: database)
+            try bindOptionalDate(workspace.lastOpenedAt, to: statement, at: 5, database: database)
+            try bindText(workspace.colorName, to: statement, at: 6, database: database)
+            try bindText(workspace.iconName, to: statement, at: 7, database: database)
+            try bindBool(workspace.isDefault, to: statement, at: 8, database: database)
+            try stepDone(statement, database: database)
+        }
+    }
+
+    private func ensureWorkspaceExists(_ workspaceID: UUID, in database: SQLiteDatabase) throws {
+        if workspaceID == Self.defaultWorkspaceID {
+            try ensureDefaultWorkspace(in: database)
+            return
+        }
+
+        var exists = false
+        try database.prepare("SELECT 1 FROM workspaces WHERE id = ?") { statement in
+            try bindText(workspaceID.uuidString, to: statement, at: 1, database: database)
+            exists = try stepRow(statement, database: database)
+        }
+        if !exists {
+            let now = Date()
+            try insertWorkspace(
+                PersistedWorkspace(
+                    id: workspaceID,
+                    name: "Workspace",
+                    createdAt: now,
+                    updatedAt: now,
+                    lastOpenedAt: nil,
+                    colorName: nil,
+                    iconName: nil,
+                    isDefault: false
+                ),
+                in: database
+            )
+        }
+    }
+
+    private func ensureDefaultWorkspace(in database: SQLiteDatabase) throws {
+        var exists = false
+        try database.prepare("SELECT 1 FROM workspaces WHERE id = ?") { statement in
+            try bindText(Self.defaultWorkspaceID.uuidString, to: statement, at: 1, database: database)
+            exists = try stepRow(statement, database: database)
+        }
+        if !exists {
+            try insertWorkspace(Self.defaultWorkspace(), in: database)
+        }
+    }
+
+    private func setWindowWorkspaceID(_ workspaceID: UUID, forWindowID windowID: UUID, in database: SQLiteDatabase) throws {
+        try database.prepare(
+            """
+            INSERT OR REPLACE INTO window_workspace_selection (window_id, workspace_id, updated_at)
+            VALUES (?, ?, ?)
+            """
+        ) { statement in
+            try bindText(windowID.uuidString, to: statement, at: 1, database: database)
+            try bindText(workspaceID.uuidString, to: statement, at: 2, database: database)
+            try bindDate(Date(), to: statement, at: 3, database: database)
+            try stepDone(statement, database: database)
+        }
+        try database.prepare("UPDATE windows SET workspace_id = ? WHERE id = ?") { statement in
+            try bindText(workspaceID.uuidString, to: statement, at: 1, database: database)
+            try bindText(windowID.uuidString, to: statement, at: 2, database: database)
+            try stepDone(statement, database: database)
+        }
+    }
+
+    private static func defaultWorkspace() -> PersistedWorkspace {
+        let now = Date()
+        return PersistedWorkspace(
+            id: defaultWorkspaceID,
+            name: "Default",
+            createdAt: now,
+            updatedAt: now,
+            lastOpenedAt: now,
+            colorName: nil,
+            iconName: "square.grid.2x2",
+            isDefault: true
+        )
+    }
+
+    private static func normalizedWorkspaceName(_ name: String, fallback: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+
     // MARK: - Metadata
 
     private func metadataValue(forKey key: String, in database: SQLiteDatabase) throws -> String? {
@@ -1110,6 +1693,12 @@ private struct PageChatRow {
     let pageTitle: String
     let updatedAt: Date
     let isSidebarVisible: Bool?
+}
+
+private struct PersistedWorkspaceStateSnapshot {
+    let workspaceID: UUID
+    let state: PersistedBrowserState
+    let updatedAt: Date
 }
 
 private final class SQLiteDatabase {
@@ -1247,6 +1836,14 @@ private func bindDate(_ value: Date, to statement: OpaquePointer, at index: Int3
     try bindDouble(value.timeIntervalSince1970, to: statement, at: index, database: database)
 }
 
+private func bindOptionalDate(_ value: Date?, to statement: OpaquePointer, at index: Int32, database: SQLiteDatabase) throws {
+    if let value {
+        try bindDate(value, to: statement, at: index, database: database)
+    } else {
+        try checkBindResult(sqlite3_bind_null(statement, index), database: database)
+    }
+}
+
 private func stepDone(_ statement: OpaquePointer, database: SQLiteDatabase) throws {
     let result = sqlite3_step(statement)
     guard result == SQLITE_DONE else {
@@ -1310,7 +1907,12 @@ private func columnDate(_ statement: OpaquePointer, at index: Int32) -> Date {
     Date(timeIntervalSince1970: sqlite3_column_double(statement, index))
 }
 
-private extension PersistedBrowserState {
+private func columnOptionalDate(_ statement: OpaquePointer, at index: Int32) -> Date? {
+    guard sqlite3_column_type(statement, index) != SQLITE_NULL else { return nil }
+    return columnDate(statement, at: index)
+}
+
+extension PersistedBrowserState {
     var isRestorableWindowState: Bool {
         tabs.contains { snapshot in
             switch snapshot.kind {
@@ -1322,6 +1924,63 @@ private extension PersistedBrowserState {
         }
     }
 
+    /// Returns a copy with freshly generated tab and tab-group identifiers.
+    /// Tab IDs are the primary key of the shared `tabs` table, so a workspace
+    /// snapshot applied to a second window must not reuse the IDs already
+    /// persisted by the first window — the insert would conflict and roll back
+    /// that window's entire persist transaction.
+    func withRegeneratedTabIdentity() -> PersistedBrowserState {
+        var groupIDMap: [UUID: UUID] = [:]
+        let regeneratedGroups = tabGroups.map { groups in
+            groups.map { group -> PersistedTabGroupSnapshot in
+                let newID = UUID()
+                groupIDMap[group.id] = newID
+                return PersistedTabGroupSnapshot(
+                    id: newID,
+                    title: group.title,
+                    isCollapsed: group.isCollapsed,
+                    createdAt: group.createdAt
+                )
+            }
+        }
+
+        var tabIDMap: [UUID: UUID] = [:]
+        let regeneratedTabs = tabs.map { tab -> PersistedTabSnapshot in
+            let newID = UUID()
+            tabIDMap[tab.id] = newID
+            return PersistedTabSnapshot(
+                id: newID,
+                kind: tab.kind,
+                title: tab.title,
+                url: tab.url,
+                groupID: tab.groupID.flatMap { groupIDMap[$0] },
+                navigationHistory: tab.navigationHistory,
+                navigationHistoryIndex: tab.navigationHistoryIndex,
+                pageZoom: tab.pageZoom,
+                isFavorite: tab.isFavorite,
+                isPinned: tab.isPinned,
+                createdAt: tab.createdAt,
+                lastAccessedAt: tab.lastAccessedAt,
+                briefing: tab.briefing
+            )
+        }
+
+        return PersistedBrowserState(
+            tabs: regeneratedTabs,
+            tabGroups: regeneratedGroups,
+            activeTabID: activeTabID.flatMap { tabIDMap[$0] },
+            isTabBarVisible: isTabBarVisible,
+            tabBarWidth: tabBarWidth,
+            chatPaneWidth: chatPaneWidth,
+            chatPaneHeight: chatPaneHeight,
+            chatPaneOffsetX: chatPaneOffsetX,
+            chatPaneOffsetY: chatPaneOffsetY,
+            pageChats: pageChats
+        )
+    }
+}
+
+private extension PersistedBrowserState {
     func clearingAIHistory() -> PersistedBrowserState {
         PersistedBrowserState(
             tabs: tabs.map { $0.clearingAIHistory() },

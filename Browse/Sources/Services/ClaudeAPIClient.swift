@@ -23,7 +23,7 @@ final class ClaudeAPIClient: Sendable {
     private let getAPIKey: @Sendable () -> String?
     private let session: URLSession
     private let baseURL = URL(string: "https://api.anthropic.com/v1/messages")!
-    private let model = "claude-opus-4-7"
+    private let model = "claude-opus-4-8"
 
     init(getAPIKey: @escaping @Sendable () -> String?, session: URLSession = .shared) {
         self.getAPIKey = getAPIKey
@@ -33,7 +33,8 @@ final class ClaudeAPIClient: Sendable {
     func streamMessage(
         system: String,
         messages: [ClaudeMessage],
-        maxTokens: Int = 4096
+        maxTokens: Int = 16000,
+        outputSchema: JSONValue? = nil
     ) -> AsyncThrowingStream<ClaudeStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -50,12 +51,19 @@ final class ClaudeAPIClient: Sendable {
                     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
                     request.timeoutInterval = 120
 
+                    // Adaptive thinking lets the model decide how much to reason;
+                    // the top-level cache_control auto-caches the request prefix so
+                    // follow-up turns re-read the system prompt and history at ~10%
+                    // of input cost instead of re-processing them.
                     let body = ClaudeMessageRequest(
                         model: model,
                         system: system,
                         messages: messages,
                         maxTokens: maxTokens,
-                        stream: true
+                        stream: true,
+                        thinking: .adaptive,
+                        outputConfig: outputSchema.map { ClaudeOutputConfig.jsonSchema($0) },
+                        cacheControl: .ephemeral
                     )
                     request.httpBody = try JSONEncoder().encode(body)
 
@@ -161,20 +169,12 @@ final class ClaudeAPIClient: Sendable {
             throw ClaudeAPIError.noAPIKey
         }
 
-        var request = URLRequest(url: baseURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Retrieving the model's metadata validates the key and model
+        // availability without spending output tokens on a completion.
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models/\(model)")!)
+        request.httpMethod = "GET"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-
-        let body = ClaudeMessageRequest(
-            model: model,
-            system: "Reply with OK.",
-            messages: [ClaudeMessage(role: "user", content: "ping")],
-            maxTokens: 10,
-            stream: false
-        )
-        request.httpBody = try JSONEncoder().encode(body)
 
         let (_, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else { return false }

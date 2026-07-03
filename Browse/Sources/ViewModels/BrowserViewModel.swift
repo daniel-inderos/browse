@@ -47,6 +47,8 @@ final class BrowserViewModel {
     var isPageZoomIndicatorVisible: Bool = false
     var pageZoomIndicatorText: String?
     var isDownloadsPanelVisible: Bool = false
+    var workspaces: [PersistedWorkspace] = []
+    var activeWorkspaceID: UUID = BrowserPersistenceStore.defaultWorkspaceID
     let isPrivateBrowsing: Bool
     let downloadManager: DownloadManager
 
@@ -75,6 +77,15 @@ final class BrowserViewModel {
     @ObservationIgnored private let settingsObserverBag = NotificationObserverBag()
     private let maxRecentlyClosedTabs = 20
     private let maxPersistedPageChats = 120
+    private let workspaceColorNames = ["blue", "green", "orange", "pink", "purple", "teal"]
+    private let workspaceIconNames = [
+        "square.grid.2x2",
+        "sparkles",
+        "briefcase",
+        "book.closed",
+        "paintpalette",
+        "moon"
+    ]
 
     var activeTab: Tab? {
         tabs.first { $0.id == activeTabID }
@@ -132,6 +143,127 @@ final class BrowserViewModel {
 
     func hideDownloadsPanel() {
         isDownloadsPanelVisible = false
+    }
+
+    // MARK: - Workspaces
+
+    var activeWorkspace: PersistedWorkspace? {
+        workspaces.first { $0.id == activeWorkspaceID }
+    }
+
+    func createWorkspace(named name: String = "New Workspace") {
+        guard allowsStatePersistence else { return }
+        saveCurrentWorkspaceState()
+        let workspace = persistenceStore.createWorkspace(
+            name: name,
+            colorName: nextWorkspaceColorName(),
+            iconName: nextWorkspaceIconName()
+        )
+        refreshWorkspaces()
+        switchWorkspace(to: workspace.id)
+    }
+
+    func createWorkspaceWithSuggestedName() {
+        createWorkspace(named: suggestedWorkspaceName())
+    }
+
+    func suggestedWorkspaceName() -> String {
+        let baseName = "Workspace"
+        let existingNames = Set(workspaces.map { $0.name.lowercased() })
+        guard existingNames.contains(baseName.lowercased()) else { return baseName }
+
+        var suffix = 2
+        while existingNames.contains("\(baseName) \(suffix)".lowercased()) {
+            suffix += 1
+        }
+        return "\(baseName) \(suffix)"
+    }
+
+    func renameWorkspace(_ id: UUID, name: String) {
+        guard allowsStatePersistence else { return }
+        persistenceStore.renameWorkspace(id, name: name)
+        refreshWorkspaces()
+    }
+
+    func duplicateWorkspace(_ id: UUID) {
+        guard allowsStatePersistence else { return }
+        saveCurrentWorkspaceState()
+        guard let workspace = persistenceStore.duplicateWorkspace(id) else { return }
+        refreshWorkspaces()
+        switchWorkspace(to: workspace.id)
+    }
+
+    func deleteWorkspace(_ id: UUID) {
+        guard allowsStatePersistence else { return }
+        guard let workspace = workspaces.first(where: { $0.id == id }),
+              !workspace.isDefault else { return }
+
+        let isDeletingActiveWorkspace = id == activeWorkspaceID
+        persistenceStore.deleteWorkspace(id)
+        refreshWorkspaces()
+
+        if isDeletingActiveWorkspace {
+            let fallbackID = workspaces.first(where: \.isDefault)?.id
+                ?? BrowserPersistenceStore.defaultWorkspaceID
+            switchWorkspace(to: fallbackID, savingCurrentWorkspaceState: false)
+        }
+    }
+
+    func switchWorkspace(to id: UUID) {
+        switchWorkspace(to: id, savingCurrentWorkspaceState: true)
+    }
+
+    func selectNextWorkspace() {
+        switchWorkspace(offset: 1)
+    }
+
+    func selectPreviousWorkspace() {
+        switchWorkspace(offset: -1)
+    }
+
+    private func switchWorkspace(to id: UUID, savingCurrentWorkspaceState: Bool) {
+        guard allowsStatePersistence else { return }
+        guard id != activeWorkspaceID else { return }
+        guard workspaces.contains(where: { $0.id == id }) else { return }
+
+        if savingCurrentWorkspaceState {
+            saveCurrentWorkspaceState()
+        }
+        scheduledPersistStateTask?.cancel()
+        scheduledPersistStateTask = nil
+        discardLiveTabsForWorkspaceSwitch()
+        activeWorkspaceID = id
+        persistenceStore.markWorkspaceOpened(id, forWindowID: windowID)
+        refreshWorkspaces()
+
+        if let state = persistenceStore.loadWorkspaceState(forWorkspaceID: id),
+           applyPersistedState(state.withRegeneratedTabIdentity()) {
+            persistState()
+        } else {
+            resetInMemoryBrowsingState()
+            newTab()
+        }
+    }
+
+    private func switchWorkspace(offset: Int) {
+        guard allowsStatePersistence else { return }
+        guard !workspaces.isEmpty else { return }
+        guard let currentIndex = workspaces.firstIndex(where: { $0.id == activeWorkspaceID }) else { return }
+
+        let nextIndex = (currentIndex + offset + workspaces.count) % workspaces.count
+        switchWorkspace(to: workspaces[nextIndex].id)
+    }
+
+    private func refreshWorkspaces() {
+        workspaces = persistenceStore.loadWorkspaces()
+    }
+
+    private func nextWorkspaceColorName() -> String {
+        workspaceColorNames[workspaces.filter { !$0.isDefault }.count % workspaceColorNames.count]
+    }
+
+    private func nextWorkspaceIconName() -> String {
+        workspaceIconNames[workspaces.filter { !$0.isDefault }.count % workspaceIconNames.count]
     }
 
     var chatTabMentionCandidates: [ChatTabMentionCandidate] {
@@ -198,6 +330,20 @@ final class BrowserViewModel {
         self.sitePermissionStore = isPrivateBrowsing ? .ephemeral() : .shared
 
         observeSettingsDataActions()
+
+        if allowsStatePersistence {
+            workspaces = persistenceStore.loadWorkspaces()
+            activeWorkspaceID = persistenceStore.workspaceID(forWindowID: windowID)
+                ?? persistenceStore.loadLastOpenedWorkspaceID()
+                ?? workspaces.first(where: \.isDefault)?.id
+                ?? BrowserPersistenceStore.defaultWorkspaceID
+            if !workspaces.contains(where: { $0.id == activeWorkspaceID }) {
+                activeWorkspaceID = workspaces.first(where: \.isDefault)?.id
+                    ?? BrowserPersistenceStore.defaultWorkspaceID
+            }
+            persistenceStore.markWorkspaceOpened(activeWorkspaceID, forWindowID: windowID)
+            workspaces = persistenceStore.loadWorkspaces()
+        }
 
         if !restoresPersistedState || !restorePersistedState() {
             newTab()
@@ -714,7 +860,7 @@ final class BrowserViewModel {
         case .web:
             content = await tab.webTabViewModel?.extractPageContent(maxLength: 8_000)
         case .briefing:
-            content = tab.briefingViewModel?.document.streamedMarkdown
+            content = tab.briefingViewModel?.document.renderedMarkdown
         }
 
         chatViewModel.addMentionedTabContext(
@@ -827,6 +973,7 @@ final class BrowserViewModel {
                     websiteDataStore: websiteDataStore,
                     downloadManager: downloadManager,
                     isPrivateBrowsing: isPrivateBrowsing,
+                    workspaceIDProvider: { [weak self] in self?.activeWorkspaceID },
                     sitePermissionStore: sitePermissionStore
                 )
                 vm.restorePageZoom(activeTab.pageZoom)
@@ -944,7 +1091,13 @@ final class BrowserViewModel {
 
     private func restorePersistedState() -> Bool {
         guard allowsStatePersistence else { return false }
-        guard let persisted = persistenceStore.loadWindowState(forWindowID: windowID) else { return false }
+        let persisted = persistenceStore.loadWindowState(forWindowID: windowID)
+            ?? persistenceStore.loadWorkspaceState(forWorkspaceID: activeWorkspaceID)
+        guard let persisted else { return false }
+        return applyPersistedState(persisted)
+    }
+
+    private func applyPersistedState(_ persisted: PersistedBrowserState) -> Bool {
         guard !persisted.tabs.isEmpty else { return false }
         pageChatSnapshotsByKey = [:]
         pageChatViewModelsByKey = [:]
@@ -995,6 +1148,7 @@ final class BrowserViewModel {
                     websiteDataStore: websiteDataStore,
                     downloadManager: downloadManager,
                     isPrivateBrowsing: isPrivateBrowsing,
+                    workspaceIDProvider: { [weak self] in self?.activeWorkspaceID },
                     sitePermissionStore: sitePermissionStore
                 )
                 webVM.restorePageZoom(snapshot.pageZoom)
@@ -1052,6 +1206,9 @@ final class BrowserViewModel {
             loadStoredURLIfNeeded(for: activeTab)
         }
         syncChatPanePresentationForActiveTab()
+        if allowsStatePersistence {
+            workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
+        }
         return true
     }
 
@@ -1078,6 +1235,12 @@ final class BrowserViewModel {
         )
     }
 
+    /// Workspaces whose content this window has displayed or written. Only a
+    /// window that owned a workspace's content may clear its stored snapshot
+    /// when the state becomes empty — a fresh blank window sharing the
+    /// workspace must never erase it.
+    @ObservationIgnored private var workspaceIDsOwnedByThisWindow: Set<UUID> = []
+
     private func persistState() {
         guard allowsStatePersistence else { return }
         scheduledPersistStateTask?.cancel()
@@ -1097,7 +1260,52 @@ final class BrowserViewModel {
     }
 
     private func writePersistedState() {
-        persistenceStore.save(makePersistedState(), forWindowID: windowID)
+        let state = makePersistedState()
+        if state.isRestorableWindowState {
+            workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
+        }
+        persistenceStore.save(state, forWindowID: windowID, workspaceID: activeWorkspaceID)
+        refreshWorkspaces()
+    }
+
+    private func saveCurrentWorkspaceState() {
+        guard allowsStatePersistence else { return }
+        let state = makePersistedState()
+        if state.isRestorableWindowState {
+            workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
+        } else if workspaceIDsOwnedByThisWindow.contains(activeWorkspaceID) {
+            // This window owned the workspace's content and it is now empty —
+            // clear the snapshot so stale tabs don't resurface later.
+            persistenceStore.clearWorkspaceState(forWorkspaceID: activeWorkspaceID)
+        }
+        persistenceStore.save(state, forWindowID: windowID, workspaceID: activeWorkspaceID)
+    }
+
+    private func discardLiveTabsForWorkspaceSwitch() {
+        tabs.forEach { tab in
+            cancelLiveBriefingWork(for: tab)
+            discardLiveWebView(for: tab)
+        }
+    }
+
+    private func resetInMemoryBrowsingState() {
+        tabs = []
+        tabGroups = []
+        activeTabID = nil
+        recentlyClosedTabs = []
+        briefingScrollOffsetsByTabID = [:]
+        pageChatSnapshotsByKey = [:]
+        pageChatViewModelsByKey = [:]
+        visiblePageChatKeys = []
+        isChatPaneVisible = false
+        chatViewModel = nil
+        isTabBarVisible = true
+        tabBarWidth = 220
+        chatPaneOffset = .zero
+        chatPaneWidth = 380
+        chatPaneHeight = 480
+        isIntentBarVisible = true
+        isIntentBarFocused = false
     }
 
     private func observeSettingsDataActions() {
@@ -1271,6 +1479,7 @@ final class BrowserViewModel {
             websiteDataStore: websiteDataStore,
             downloadManager: downloadManager,
             isPrivateBrowsing: isPrivateBrowsing,
+            workspaceIDProvider: { [weak self] in self?.activeWorkspaceID },
             sitePermissionStore: sitePermissionStore
         )
         webVM.restorePageZoom(pageZoom)
@@ -1290,6 +1499,7 @@ final class BrowserViewModel {
             websiteDataStore: websiteDataStore,
             downloadManager: downloadManager,
             isPrivateBrowsing: isPrivateBrowsing,
+            workspaceIDProvider: { [weak self] in self?.activeWorkspaceID },
             sitePermissionStore: sitePermissionStore
         )
         webVM.restorePageZoom(tab.pageZoom)
