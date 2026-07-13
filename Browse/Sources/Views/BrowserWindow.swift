@@ -8,6 +8,7 @@ import AppKit
 /// when that sidebar is visible, and otherwise keeps the titlebar copy hidden.
 @MainActor
 private final class TrafficLightAlignerView: NSView {
+    private static let fallbackFrameDefaultsKey = "Browse.LastWindowFrame"
     private static let windowButtonTypes: [NSWindow.ButtonType] = [
         .closeButton,
         .miniaturizeButton,
@@ -16,12 +17,25 @@ private final class TrafficLightAlignerView: NSView {
 
     var onWindowWillClose: (() -> Void)?
 
+    private let frameDefaultsKey: String
     private weak var observedWindow: NSWindow?
-    private var closeObserver: NSObjectProtocol?
+    private var windowObservers: [NSObjectProtocol] = []
+    private var pendingFrame: NSRect?
+    private var didRestoreInitialFrame = false
+
+    init(windowID: UUID) {
+        frameDefaultsKey = "Browse.WindowFrame.\(windowID.uuidString)"
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
-            removeCloseObserver()
+            removeWindowObservers()
         }
         super.viewWillMove(toWindow: newWindow)
     }
@@ -30,7 +44,8 @@ private final class TrafficLightAlignerView: NSView {
         super.viewDidMoveToWindow()
         guard let window else { return }
         window.isRestorable = false
-        observeCloseNotification(for: window)
+        prepareFrameRestoration(for: window)
+        observeWindowNotifications(for: window)
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = false
@@ -74,35 +89,139 @@ private final class TrafficLightAlignerView: NSView {
         }
     }
 
-    private func observeCloseNotification(for window: NSWindow) {
-        guard observedWindow !== window else { return }
-        removeCloseObserver()
-        observedWindow = window
-        closeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.onWindowWillClose?()
-            }
+    private func prepareFrameRestoration(for window: NSWindow) {
+        let defaults = UserDefaults.standard
+        let savedFrame = defaults.string(forKey: frameDefaultsKey)
+            ?? defaults.string(forKey: Self.fallbackFrameDefaultsKey)
+        pendingFrame = savedFrame.flatMap { restoredFrame(from: $0, for: window) }
+        didRestoreInitialFrame = false
+
+        // SwiftUI applies its default window size after the hosting view is attached.
+        // Restore on the next run-loop turn so our saved geometry wins that race.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.restoreInitialFrameIfNeeded(for: window)
         }
     }
 
-    private func removeCloseObserver() {
-        if let closeObserver {
-            NotificationCenter.default.removeObserver(closeObserver)
-            self.closeObserver = nil
+    private func restoreInitialFrameIfNeeded(for window: NSWindow) {
+        guard !didRestoreInitialFrame else { return }
+        didRestoreInitialFrame = true
+
+        if let pendingFrame {
+            window.setFrame(pendingFrame, display: true)
+            self.pendingFrame = nil
         }
+        saveFrame(for: window)
+    }
+
+    private func observeWindowNotifications(for window: NSWindow) {
+        guard observedWindow !== window else { return }
+        removeWindowObservers()
+        observedWindow = window
+
+        let center = NotificationCenter.default
+        windowObservers.append(center.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            Task { @MainActor [weak self] in
+                if let window {
+                    self?.saveFrame(for: window)
+                }
+                self?.onWindowWillClose?()
+            }
+        })
+
+        windowObservers.append(center.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self, weak window] _ in
+            Task { @MainActor [weak self, weak window] in
+                guard let self, let window else { return }
+                self.restoreInitialFrameIfNeeded(for: window)
+            }
+        })
+
+        for notification in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            windowObservers.append(center.addObserver(
+                forName: notification,
+                object: window,
+                queue: .main
+            ) { [weak self, weak window] _ in
+                Task { @MainActor [weak self, weak window] in
+                    guard let self, let window else { return }
+                    self.saveFrame(for: window)
+                }
+            })
+        }
+    }
+
+    private func saveFrame(for window: NSWindow) {
+        guard didRestoreInitialFrame else { return }
+        guard !window.styleMask.contains(.fullScreen) else { return }
+
+        let frame = NSStringFromRect(window.frame)
+        let defaults = UserDefaults.standard
+        defaults.set(frame, forKey: frameDefaultsKey)
+        defaults.set(frame, forKey: Self.fallbackFrameDefaultsKey)
+    }
+
+    private func restoredFrame(from value: String, for window: NSWindow) -> NSRect? {
+        let savedFrame = NSRectFromString(value)
+        guard savedFrame.width.isFinite, savedFrame.height.isFinite,
+              savedFrame.minX.isFinite, savedFrame.minY.isFinite,
+              savedFrame.width > 0, savedFrame.height > 0 else {
+            return nil
+        }
+
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return savedFrame }
+
+        let bestMatchingScreen = screens.max { first, second in
+            intersectionArea(savedFrame, first.visibleFrame)
+                < intersectionArea(savedFrame, second.visibleFrame)
+        }
+        let destinationScreen: NSScreen
+        if let bestMatchingScreen,
+           intersectionArea(savedFrame, bestMatchingScreen.visibleFrame) > 0 {
+            destinationScreen = bestMatchingScreen
+        } else {
+            destinationScreen = NSScreen.main ?? screens[0]
+        }
+        let visibleFrame = destinationScreen.visibleFrame
+        let minimumSize = window.minSize
+        let width = min(max(savedFrame.width, minimumSize.width), visibleFrame.width)
+        let height = min(max(savedFrame.height, minimumSize.height), visibleFrame.height)
+        let x = min(max(savedFrame.minX, visibleFrame.minX), visibleFrame.maxX - width)
+        let y = min(max(savedFrame.minY, visibleFrame.minY), visibleFrame.maxY - height)
+
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func intersectionArea(_ first: NSRect, _ second: NSRect) -> CGFloat {
+        let intersection = first.intersection(second)
+        guard !intersection.isNull else { return 0 }
+        return intersection.width * intersection.height
+    }
+
+    private func removeWindowObservers() {
+        for observer in windowObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        windowObservers.removeAll()
         observedWindow = nil
     }
 }
 
 private struct WindowAccessor: NSViewRepresentable {
+    let windowID: UUID
     let onWindowWillClose: () -> Void
 
     func makeNSView(context: Context) -> TrafficLightAlignerView {
-        let view = TrafficLightAlignerView()
+        let view = TrafficLightAlignerView(windowID: windowID)
         view.onWindowWillClose = onWindowWillClose
         return view
     }
@@ -232,7 +351,7 @@ struct BrowserWindow: View {
         .environment(browserVM)
         .focusedSceneValue(\.browserViewModel, browserVM)
         .background(
-            WindowAccessor {
+            WindowAccessor(windowID: configuration.id) {
                 BrowserWindowSessionController.shared.unregisterClosedWindow(
                     configuration: configuration
                 )
