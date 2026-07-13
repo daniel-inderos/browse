@@ -659,6 +659,7 @@ final class BrowserViewModel {
     }
 
     @ObservationIgnored private var selectionAnchorTabID: UUID?
+    @ObservationIgnored private var selectionAnchorGroupID: UUID?
 
     /// Cmd-click: toggle a tab in/out of the multi-selection. Starting a new
     /// selection implicitly includes the active tab, following macOS
@@ -685,6 +686,21 @@ final class BrowserViewModel {
         } else {
             selectedGroupIDs.insert(id)
         }
+        selectionAnchorGroupID = id
+    }
+
+    /// Shift-click on a folder header: select the contiguous folder range
+    /// from the most recently selected folder to the clicked folder.
+    func extendGroupSelection(to id: UUID) {
+        guard let targetIndex = tabGroups.firstIndex(where: { $0.id == id }) else { return }
+        guard let anchorID = selectionAnchorGroupID,
+              let anchorIndex = tabGroups.firstIndex(where: { $0.id == anchorID }) else {
+            selectedGroupIDs.insert(id)
+            selectionAnchorGroupID = id
+            return
+        }
+        let range = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
+        selectedGroupIDs.formUnion(tabGroups[range].map(\.id))
     }
 
     /// Shift-click: select the visual range between the selection anchor
@@ -706,6 +722,7 @@ final class BrowserViewModel {
         selectedTabIDs = []
         selectedGroupIDs = []
         selectionAnchorTabID = nil
+        selectionAnchorGroupID = nil
     }
 
     /// Bulk close: closes every selected tab (favorites are unloaded, not
@@ -745,6 +762,10 @@ final class BrowserViewModel {
         selectedGroupIDs.formIntersection(tabGroups.map(\.id))
         if let anchorID = selectionAnchorTabID, !tabs.contains(where: { $0.id == anchorID }) {
             selectionAnchorTabID = nil
+        }
+        if let anchorID = selectionAnchorGroupID,
+           !tabGroups.contains(where: { $0.id == anchorID }) {
+            selectionAnchorGroupID = nil
         }
     }
 
@@ -906,8 +927,16 @@ final class BrowserViewModel {
     }
 
     func renameTabGroup(_ id: UUID, title: String) {
-        guard let index = tabGroups.firstIndex(where: { $0.id == id }) else { return }
-        tabGroups[index].title = normalizedGroupTitle(title)
+        renameTabGroups([id], title: title)
+    }
+
+    func renameTabGroups(_ ids: Set<UUID>, title: String) {
+        let matchingIndices = tabGroups.indices.filter { ids.contains(tabGroups[$0].id) }
+        guard !matchingIndices.isEmpty else { return }
+        let resolvedTitle = normalizedGroupTitle(title)
+        for index in matchingIndices {
+            tabGroups[index].title = resolvedTitle
+        }
         persistState()
     }
 
@@ -929,16 +958,30 @@ final class BrowserViewModel {
     }
 
     func ungroupTabs(in groupID: UUID) {
-        guard tabGroups.contains(where: { $0.id == groupID }) else { return }
-        tabs.filter { $0.groupID == groupID }.forEach { $0.groupID = nil }
+        ungroupTabs(in: [groupID])
+    }
+
+    func ungroupTabs(in groupIDs: Set<UUID>) {
+        guard tabGroups.contains(where: { groupIDs.contains($0.id) }) else { return }
+        tabs.filter { tab in
+            tab.groupID.map(groupIDs.contains) ?? false
+        }.forEach { $0.groupID = nil }
         persistState()
     }
 
     func deleteTabGroup(_ groupID: UUID) {
-        guard let index = tabGroups.firstIndex(where: { $0.id == groupID }) else { return }
-        tabs.filter { $0.groupID == groupID }.forEach { $0.groupID = nil }
-        tabGroups.remove(at: index)
-        selectedGroupIDs.remove(groupID)
+        deleteTabGroups([groupID])
+    }
+
+    func deleteTabGroups(_ groupIDs: Set<UUID>) {
+        let existingGroupIDs = Set(tabGroups.lazy.map(\.id)).intersection(groupIDs)
+        guard !existingGroupIDs.isEmpty else { return }
+        tabs.filter { tab in
+            tab.groupID.map(existingGroupIDs.contains) ?? false
+        }.forEach { $0.groupID = nil }
+        tabGroups.removeAll { existingGroupIDs.contains($0.id) }
+        selectedGroupIDs.subtract(existingGroupIDs)
+        pruneSidebarSelection()
         persistState()
     }
 

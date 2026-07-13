@@ -8,7 +8,7 @@ struct TabBarView: View {
 
     @State private var draggingTabID: UUID?
     @State private var dragOffset: CGFloat = 0
-    @State private var groupIDBeingRenamed: UUID?
+    @State private var groupIDsBeingRenamed: Set<UUID> = []
     @State private var pendingGroupTitle = ""
     @State private var isRenameGroupAlertPresented = false
     @State private var dropTargetGroupID: UUID?
@@ -171,14 +171,18 @@ struct TabBarView: View {
                 }
             )
         )
-        .alert("Rename Folder", isPresented: $isRenameGroupAlertPresented) {
+        .alert(renameFolderAlertTitle, isPresented: $isRenameGroupAlertPresented) {
             TextField("Folder Name", text: $pendingGroupTitle)
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                groupIDsBeingRenamed = []
+            }
             Button("Rename") {
-                if let groupIDBeingRenamed {
-                    browserVM.renameTabGroup(groupIDBeingRenamed, title: pendingGroupTitle)
-                }
-                groupIDBeingRenamed = nil
+                browserVM.renameTabGroups(groupIDsBeingRenamed, title: pendingGroupTitle)
+                groupIDsBeingRenamed = []
+            }
+        } message: {
+            if groupIDsBeingRenamed.count > 1 {
+                Text("All selected folders will use this name.")
             }
         }
         .alert("Rename Workspace", isPresented: $isRenameWorkspaceAlertPresented) {
@@ -430,6 +434,11 @@ struct TabBarView: View {
         let tabs = groupedTabs(for: group)
         let isDropTargeted = dropTargetGroupID == group.id
         let isMultiSelected = browserVM.selectedGroupIDs.contains(group.id)
+        let targetGroupIDs = contextMenuGroupIDs(for: group)
+        let targetGroupCount = targetGroupIDs.count
+        let selectedFoldersHaveTabs = browserVM.tabs.contains { tab in
+            tab.groupID.map(targetGroupIDs.contains) ?? false
+        }
 
         return VStack(spacing: 2) {
             Button {
@@ -477,9 +486,15 @@ struct TabBarView: View {
             }
             .buttonStyle(.plain)
             .highPriorityGesture(
-                TapGesture().modifiers(.command).onEnded {
-                    browserVM.toggleGroupSelection(group.id)
-                }
+                TapGesture().modifiers(.command)
+                    .onEnded {
+                        browserVM.toggleGroupSelection(group.id)
+                    }
+                    .exclusively(
+                        before: TapGesture().modifiers(.shift).onEnded {
+                            browserVM.extendGroupSelection(to: group.id)
+                        }
+                    )
             )
             .dropDestination(for: String.self) { items, _ in
                 guard let draggedTabID = draggedTabID(from: items) else { return false }
@@ -501,15 +516,18 @@ struct TabBarView: View {
                     }
                     Divider()
                 }
-                Button("Rename Folder") {
-                    beginRenaming(group)
+                Button(targetGroupCount > 1 ? "Rename \(targetGroupCount) Folders" : "Rename Folder") {
+                    beginRenaming(group, targetGroupIDs: targetGroupIDs)
                 }
-                Button("Ungroup Tabs") {
-                    browserVM.ungroupTabs(in: group.id)
+                Button(targetGroupCount > 1 ? "Ungroup Tabs in \(targetGroupCount) Folders" : "Ungroup Tabs") {
+                    browserVM.ungroupTabs(in: targetGroupIDs)
                 }
-                .disabled(tabs.isEmpty)
-                Button("Delete Folder", role: .destructive) {
-                    browserVM.deleteTabGroup(group.id)
+                .disabled(!selectedFoldersHaveTabs)
+                Button(
+                    targetGroupCount > 1 ? "Delete \(targetGroupCount) Folders" : "Delete Folder",
+                    role: .destructive
+                ) {
+                    browserVM.deleteTabGroups(targetGroupIDs)
                 }
             }
 
@@ -528,9 +546,21 @@ struct TabBarView: View {
         }
     }
 
-    private func beginRenaming(_ group: TabGroup) {
-        groupIDBeingRenamed = group.id
-        pendingGroupTitle = group.title
+    private var renameFolderAlertTitle: String {
+        groupIDsBeingRenamed.count > 1
+            ? "Rename \(groupIDsBeingRenamed.count) Folders"
+            : "Rename Folder"
+    }
+
+    private func contextMenuGroupIDs(for group: TabGroup) -> Set<UUID> {
+        browserVM.selectedGroupIDs.contains(group.id)
+            ? browserVM.selectedGroupIDs
+            : [group.id]
+    }
+
+    private func beginRenaming(_ group: TabGroup, targetGroupIDs: Set<UUID>? = nil) {
+        groupIDsBeingRenamed = targetGroupIDs ?? [group.id]
+        pendingGroupTitle = groupIDsBeingRenamed.count == 1 ? group.title : ""
         isRenameGroupAlertPresented = true
     }
 

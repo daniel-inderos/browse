@@ -913,6 +913,49 @@ struct BrowserViewModelTests {
         #expect(viewModel.selectedGroupIDs.isEmpty)
     }
 
+    @Test("Shift-click selects a range of folders for a bulk action")
+    func shiftClickSelectsFolderRange() {
+        let viewModel = makeViewModel()
+        let firstGroupID = viewModel.createTabGroup(title: "First")
+        let secondGroupID = viewModel.createTabGroup(title: "Second")
+        let thirdGroupID = viewModel.createTabGroup(title: "Third")
+
+        viewModel.toggleGroupSelection(firstGroupID)
+        viewModel.extendGroupSelection(to: thirdGroupID)
+
+        #expect(viewModel.selectedGroupIDs == [firstGroupID, secondGroupID, thirdGroupID])
+
+        viewModel.closeSidebarSelection()
+
+        #expect(viewModel.tabGroups.isEmpty)
+        #expect(viewModel.selectedGroupIDs.isEmpty)
+    }
+
+    @Test("Folder actions apply to every selected folder")
+    func folderActionsApplyToEverySelectedFolder() throws {
+        let viewModel = makeViewModel()
+        let firstTab = try #require(viewModel.activeTab)
+        let firstGroupID = viewModel.createTabGroup(title: "First", containing: firstTab.id)
+        viewModel.newTab()
+        let secondTab = try #require(viewModel.activeTab)
+        let secondGroupID = viewModel.createTabGroup(title: "Second", containing: secondTab.id)
+        let selectedGroupIDs: Set<UUID> = [firstGroupID, secondGroupID]
+
+        viewModel.renameTabGroups(selectedGroupIDs, title: "Selected")
+        #expect(viewModel.tabGroups.map(\.title) == ["Selected", "Selected"])
+
+        viewModel.ungroupTabs(in: selectedGroupIDs)
+        #expect(viewModel.tabs.allSatisfy { $0.groupID == nil })
+
+        viewModel.toggleGroupSelection(firstGroupID)
+        viewModel.toggleGroupSelection(secondGroupID)
+        viewModel.deleteTabGroups(selectedGroupIDs)
+
+        #expect(viewModel.tabGroups.isEmpty)
+        #expect(viewModel.selectedGroupIDs.isEmpty)
+        #expect(viewModel.tabs.map(\.id) == [firstTab.id, secondTab.id])
+    }
+
     private func makeViewModel() -> BrowserViewModel {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
