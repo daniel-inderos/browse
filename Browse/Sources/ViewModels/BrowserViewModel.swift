@@ -260,11 +260,12 @@ final class BrowserViewModel {
         if let state = persistenceStore.loadWorkspaceState(forWorkspaceID: id),
            applyPersistedState(
                state.withRegeneratedTabIdentity(),
-               preservedFavoriteTabs: preservedFavoriteTabs
+               preservedFavoriteTabs: preservedFavoriteTabs,
+               restoresTabBarWidth: false
            ) {
             persistState()
         } else {
-            resetInMemoryBrowsingState()
+            resetInMemoryBrowsingState(resetsTabBarWidth: false)
             tabs = preservedFavoriteTabs
             newTab()
         }
@@ -1290,7 +1291,8 @@ final class BrowserViewModel {
 
     private func applyPersistedState(
         _ persisted: PersistedBrowserState,
-        preservedFavoriteTabs: [Tab]? = nil
+        preservedFavoriteTabs: [Tab]? = nil,
+        restoresTabBarWidth: Bool = true
     ) -> Bool {
         guard !persisted.tabs.isEmpty else { return false }
         pageChatSnapshotsByKey = [:]
@@ -1345,7 +1347,9 @@ final class BrowserViewModel {
             ?? tabs.first?.id
 
         isTabBarVisible = persisted.isTabBarVisible
-        tabBarWidth = max(180, min(CGFloat(persisted.tabBarWidth), 360))
+        if restoresTabBarWidth {
+            tabBarWidth = max(180, min(CGFloat(persisted.tabBarWidth), 360))
+        }
         chatPaneOffset = CGSize(
             width: CGFloat(persisted.chatPaneOffsetX ?? 0),
             height: CGFloat(persisted.chatPaneOffsetY ?? 0)
@@ -1539,7 +1543,7 @@ final class BrowserViewModel {
         }
     }
 
-    private func resetInMemoryBrowsingState() {
+    private func resetInMemoryBrowsingState(resetsTabBarWidth: Bool = true) {
         tabs = []
         tabGroups = []
         activeTabID = nil
@@ -1552,7 +1556,9 @@ final class BrowserViewModel {
         isChatPaneVisible = false
         chatViewModel = nil
         isTabBarVisible = true
-        tabBarWidth = 220
+        if resetsTabBarWidth {
+            tabBarWidth = 220
+        }
         chatPaneOffset = .zero
         chatPaneWidth = 380
         chatPaneHeight = 480
