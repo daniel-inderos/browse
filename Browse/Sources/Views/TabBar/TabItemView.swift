@@ -3,6 +3,7 @@ import SwiftUI
 struct TabItemView: View {
     let tab: Tab
     let isActive: Bool
+    let isMultiSelected: Bool
     let compact: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -15,12 +16,17 @@ struct TabItemView: View {
     let tabGroups: [TabGroup]
     let onCreateFolderFromTab: () -> Void
     let onMoveToGroup: (UUID?) -> Void
+    let selectionCount: Int
+    let onCloseSelection: (() -> Void)?
+    let onMoveSelectionToGroup: ((UUID?) -> Void)?
+    let onClearSelection: (() -> Void)?
 
     @State private var isHovering = false
 
     init(
         tab: Tab,
         isActive: Bool,
+        isMultiSelected: Bool = false,
         compact: Bool = false,
         onSelect: @escaping () -> Void,
         onClose: @escaping () -> Void,
@@ -32,10 +38,15 @@ struct TabItemView: View {
         onToggleFavorite: @escaping () -> Void,
         tabGroups: [TabGroup],
         onCreateFolderFromTab: @escaping () -> Void,
-        onMoveToGroup: @escaping (UUID?) -> Void
+        onMoveToGroup: @escaping (UUID?) -> Void,
+        selectionCount: Int = 0,
+        onCloseSelection: (() -> Void)? = nil,
+        onMoveSelectionToGroup: ((UUID?) -> Void)? = nil,
+        onClearSelection: (() -> Void)? = nil
     ) {
         self.tab = tab
         self.isActive = isActive
+        self.isMultiSelected = isMultiSelected
         self.compact = compact
         self.onSelect = onSelect
         self.onClose = onClose
@@ -48,6 +59,10 @@ struct TabItemView: View {
         self.tabGroups = tabGroups
         self.onCreateFolderFromTab = onCreateFolderFromTab
         self.onMoveToGroup = onMoveToGroup
+        self.selectionCount = selectionCount
+        self.onCloseSelection = onCloseSelection
+        self.onMoveSelectionToGroup = onMoveSelectionToGroup
+        self.onClearSelection = onClearSelection
     }
 
     var body: some View {
@@ -86,8 +101,10 @@ struct TabItemView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(
-                        isActive ? BrowseColor.accent.opacity(0.15) : Color.clear,
-                        lineWidth: 0.5
+                        isMultiSelected
+                            ? BrowseColor.accent.opacity(0.45)
+                            : (isActive ? BrowseColor.accent.opacity(0.15) : Color.clear),
+                        lineWidth: isMultiSelected ? 1 : 0.5
                     )
             )
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -95,6 +112,10 @@ struct TabItemView: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .contextMenu {
+            if isMultiSelected, selectionCount > 1 {
+                bulkSelectionMenu
+                Divider()
+            }
             Button("Close") {
                 onClose()
             }
@@ -135,8 +156,34 @@ struct TabItemView: View {
         return tab.title
     }
 
+    @ViewBuilder
+    private var bulkSelectionMenu: some View {
+        Button("Close \(selectionCount) Selected Items") {
+            onCloseSelection?()
+        }
+
+        if let onMoveSelectionToGroup, !tabGroups.isEmpty {
+            Menu("Move Selection to Folder") {
+                Button("No Folder") {
+                    onMoveSelectionToGroup(nil)
+                }
+                ForEach(tabGroups) { group in
+                    Button(group.title) {
+                        onMoveSelectionToGroup(group.id)
+                    }
+                }
+            }
+        }
+
+        Button("Clear Selection") {
+            onClearSelection?()
+        }
+    }
+
     private var tabBackground: some ShapeStyle {
-        if isActive {
+        if isMultiSelected {
+            return AnyShapeStyle(BrowseColor.accent.opacity(0.14))
+        } else if isActive {
             return AnyShapeStyle(BrowseColor.surfaceActive)
         } else if isHovering {
             return AnyShapeStyle(BrowseColor.surfaceHover)
@@ -200,6 +247,7 @@ struct FavoriteTabItemView: View {
     let onDuplicate: () -> Void
     let onTogglePin: () -> Void
     let onToggleFavorite: () -> Void
+    var isMultiSelected: Bool = false
 
     @State private var isHovering = false
 
@@ -210,7 +258,7 @@ struct FavoriteTabItemView: View {
                     .fill(tabBackground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(tabBorder, lineWidth: 0.5)
+                            .strokeBorder(tabBorder, lineWidth: isMultiSelected ? 1 : 0.5)
                     )
 
                 Group {
@@ -223,6 +271,9 @@ struct FavoriteTabItemView: View {
                     }
                 }
                 .frame(width: 24, height: 24)
+                // Unloaded favorites stay in place but read as inactive.
+                .opacity(tab.isUnloaded ? 0.4 : 1)
+                .saturation(tab.isUnloaded ? 0 : 1)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 54)
@@ -235,6 +286,7 @@ struct FavoriteTabItemView: View {
             Button("Close") {
                 onClose()
             }
+            .disabled(tab.isUnloaded)
             Button("Close Others") {
                 onCloseOthers()
             }
@@ -260,6 +312,9 @@ struct FavoriteTabItemView: View {
     }
 
     private var tabBackground: Color {
+        if isMultiSelected {
+            return BrowseColor.accent.opacity(0.14)
+        }
         if isActive {
             return BrowseColor.surfaceActive
         }
@@ -270,6 +325,9 @@ struct FavoriteTabItemView: View {
     }
 
     private var tabBorder: Color {
+        if isMultiSelected {
+            return BrowseColor.accent.opacity(0.45)
+        }
         if isActive {
             return BrowseColor.accent.opacity(0.22)
         }

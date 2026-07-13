@@ -37,6 +37,14 @@ final class Tab: Identifiable {
         hoursSinceLastAccess >= 4
     }
 
+    /// True when a web tab has a saved destination but no live web content —
+    /// e.g. a favorite that was "closed" (unloaded) and will reload fresh on
+    /// the next click.
+    @MainActor
+    var isUnloaded: Bool {
+        kind == .web && url != nil && webTabViewModel?.currentURL == nil
+    }
+
     /// Opacity multiplier: 1.0 for fresh tabs, ramps down to ~0.45 for very old tabs.
     /// Favorite and pinned tabs are exempt from decay.
     var decayOpacity: Double {

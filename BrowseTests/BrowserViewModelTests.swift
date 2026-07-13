@@ -568,6 +568,10 @@ struct BrowserViewModelTests {
         orderedWorkspaceIDs = viewModel.workspaces.map(\.id)
         viewModel.selectPreviousWorkspace()
         #expect(viewModel.activeWorkspaceID == orderedWorkspaceIDs.last)
+        #expect(viewModel.workspaceSwitchDirection == -1)
+
+        viewModel.selectNextWorkspace()
+        #expect(viewModel.workspaceSwitchDirection == 1)
         #expect(viewModel.workspaces.contains { $0.id == firstWorkspaceID })
     }
 
@@ -628,6 +632,258 @@ struct BrowserViewModelTests {
         #expect(viewModel.workspaces.isEmpty)
         #expect(store.loadWindowState(forWindowID: windowID) == nil)
         #expect(store.workspaceID(forWindowID: windowID) == nil)
+    }
+
+    @Test("Favorites are shared across workspaces")
+    func favoritesAreSharedAcrossWorkspaces() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let viewModel = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        let defaultWorkspaceID = viewModel.activeWorkspaceID
+        let regular = try #require(viewModel.activeTab)
+        regular.title = "Default Page"
+        regular.url = URL(string: "https://example.com/default")
+
+        viewModel.newTab()
+        let favorite = try #require(viewModel.activeTab)
+        favorite.title = "Docs"
+        favorite.url = URL(string: "https://example.com/docs")
+        viewModel.toggleFavorite(favorite.id)
+
+        viewModel.createWorkspace(named: "Second")
+        let secondWorkspaceID = viewModel.activeWorkspaceID
+
+        // The favorite carries over live, with the same identity, and is not
+        // part of the new workspace's own tabs.
+        #expect(viewModel.tabs.filter(\.isFavorite).map(\.id) == [favorite.id])
+        #expect(viewModel.tabs.contains { !$0.isFavorite })
+
+        // Switching back must not duplicate the favorite.
+        viewModel.switchWorkspace(to: defaultWorkspaceID)
+        #expect(viewModel.tabs.filter(\.isFavorite).map(\.id) == [favorite.id])
+        #expect(viewModel.tabs.contains { $0.url == URL(string: "https://example.com/default") })
+
+        // Unfavoriting removes it from every workspace and the global store.
+        viewModel.toggleFavorite(favorite.id)
+        viewModel.switchWorkspace(to: secondWorkspaceID)
+        #expect(viewModel.tabs.filter(\.isFavorite).isEmpty)
+        #expect(store.loadGlobalFavorites().isEmpty)
+    }
+
+    @Test("Global favorites are restored for new browser instances")
+    func globalFavoritesRestoredForNewInstances() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let first = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: store
+        )
+        let favorite = try #require(first.activeTab)
+        favorite.title = "Docs"
+        favorite.url = URL(string: "https://example.com/docs")
+        first.toggleFavorite(favorite.id)
+
+        let second = BrowserViewModel(windowID: UUID(), persistenceStore: store)
+        let restoredFavorites = second.tabs.filter(\.isFavorite)
+        #expect(restoredFavorites.count == 1)
+        #expect(restoredFavorites.first?.url == URL(string: "https://example.com/docs"))
+        // Each window materializes favorites under a fresh tab identity.
+        #expect(restoredFavorites.first?.id != favorite.id)
+    }
+
+    @Test("Legacy per-workspace favorites merge into the global set")
+    func legacyFavoritesMergeIntoGlobalSet() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let windowID = UUID()
+        let favoriteURL = try #require(URL(string: "https://example.com/legacy-favorite"))
+        let regularURL = try #require(URL(string: "https://example.com/regular"))
+        let regularTabID = UUID()
+        let state = PersistedBrowserState(
+            tabs: [
+                PersistedTabSnapshot(
+                    id: UUID(),
+                    kind: .web,
+                    title: "Legacy Favorite",
+                    url: favoriteURL,
+                    navigationHistory: [favoriteURL],
+                    navigationHistoryIndex: 0,
+                    isFavorite: true,
+                    isPinned: false,
+                    createdAt: Date(timeIntervalSince1970: 1_000),
+                    lastAccessedAt: Date(timeIntervalSince1970: 2_000),
+                    briefing: nil
+                ),
+                PersistedTabSnapshot(
+                    id: regularTabID,
+                    kind: .web,
+                    title: "Regular",
+                    url: regularURL,
+                    navigationHistory: [regularURL],
+                    navigationHistoryIndex: 0,
+                    isFavorite: false,
+                    isPinned: false,
+                    createdAt: Date(timeIntervalSince1970: 1_100),
+                    lastAccessedAt: Date(timeIntervalSince1970: 2_100),
+                    briefing: nil
+                )
+            ],
+            activeTabID: regularTabID,
+            isTabBarVisible: true,
+            tabBarWidth: 220,
+            chatPaneWidth: nil,
+            chatPaneHeight: nil,
+            chatPaneOffsetX: nil,
+            chatPaneOffsetY: nil,
+            pageChats: nil
+        )
+        store.save(state, forWindowID: windowID)
+
+        let viewModel = BrowserViewModel(windowID: windowID, persistenceStore: store)
+
+        let favorites = viewModel.tabs.filter(\.isFavorite)
+        #expect(favorites.count == 1)
+        #expect(favorites.first?.url == favoriteURL)
+        #expect(viewModel.activeTabID == regularTabID)
+
+        // The merged favorite lands in the global store on the next persist.
+        viewModel.newTab()
+        #expect(store.loadGlobalFavorites().map(\.url) == [favoriteURL])
+    }
+
+    @Test("Closing a favorite unloads it instead of removing it")
+    func closingFavoriteUnloadsItInsteadOfRemoving() throws {
+        let viewModel = makeViewModel()
+        let favorite = try #require(viewModel.activeTab)
+        let url = try #require(URL(string: "https://example.com/favorite"))
+        favorite.url = url
+        favorite.webTabViewModel?.currentURL = url
+        viewModel.toggleFavorite(favorite.id)
+
+        viewModel.newTab()
+        let other = try #require(viewModel.activeTab)
+
+        viewModel.selectTab(favorite.id)
+        viewModel.closeTab(favorite.id)
+
+        #expect(viewModel.tabs.contains { $0.id == favorite.id })
+        #expect(favorite.webTabViewModel == nil)
+        #expect(favorite.url == url)
+        #expect(favorite.isUnloaded)
+        #expect(viewModel.activeTabID == other.id)
+
+        // Clicking the unloaded favorite reloads it fresh.
+        viewModel.selectTab(favorite.id)
+        #expect(viewModel.activeTabID == favorite.id)
+        #expect(favorite.webTabViewModel != nil)
+    }
+
+    @Test("Closing the only tab when it is a favorite clears the active tab")
+    func closingOnlyFavoriteClearsActiveTab() throws {
+        let viewModel = makeViewModel()
+        let favorite = try #require(viewModel.activeTab)
+        favorite.url = URL(string: "https://example.com/only")
+        viewModel.toggleFavorite(favorite.id)
+
+        viewModel.closeTab(favorite.id)
+
+        #expect(viewModel.tabs.contains { $0.id == favorite.id })
+        #expect(viewModel.activeTabID == nil)
+    }
+
+    @Test("Close Others keeps favorites in place but unloads them")
+    func closeOthersKeepsFavoritesButUnloadsThem() throws {
+        let viewModel = makeViewModel()
+        let favorite = try #require(viewModel.activeTab)
+        favorite.url = URL(string: "https://example.com/favorite")
+        viewModel.toggleFavorite(favorite.id)
+
+        viewModel.newTab()
+        viewModel.newTab()
+        let kept = try #require(viewModel.activeTab)
+
+        viewModel.closeOtherTabs(keeping: kept.id)
+
+        #expect(viewModel.tabs.count == 2)
+        #expect(viewModel.tabs.contains { $0.id == favorite.id })
+        #expect(favorite.webTabViewModel == nil)
+        #expect(viewModel.activeTabID == kept.id)
+    }
+
+    @Test("Cmd-click selection toggles tabs and bulk close applies to selection")
+    func multiSelectionTogglesAndBulkCloses() throws {
+        let viewModel = makeViewModel()
+        let first = try #require(viewModel.activeTab)
+        viewModel.newTab()
+        let second = try #require(viewModel.activeTab)
+        viewModel.newTab()
+        let third = try #require(viewModel.activeTab)
+
+        viewModel.selectTab(first.id)
+        viewModel.toggleTabSelection(second.id)
+        #expect(viewModel.selectedTabIDs == [first.id, second.id])
+
+        viewModel.toggleTabSelection(second.id)
+        #expect(viewModel.selectedTabIDs == [first.id])
+
+        viewModel.toggleTabSelection(second.id)
+        viewModel.closeSidebarSelection()
+
+        #expect(viewModel.tabs.map(\.id) == [third.id])
+        #expect(viewModel.selectedTabIDs.isEmpty)
+        #expect(viewModel.activeTabID == third.id)
+    }
+
+    @Test("Shift-click extends the selection across the visible range")
+    func shiftClickExtendsSelectionRange() throws {
+        let viewModel = makeViewModel()
+        let first = try #require(viewModel.activeTab)
+        viewModel.newTab()
+        let second = try #require(viewModel.activeTab)
+        viewModel.newTab()
+        let third = try #require(viewModel.activeTab)
+
+        viewModel.selectTab(first.id)
+        viewModel.extendTabSelection(to: third.id)
+        #expect(viewModel.selectedTabIDs == [first.id, second.id, third.id])
+
+        // A plain click clears the multi-selection.
+        viewModel.selectTab(second.id)
+        #expect(viewModel.selectedTabIDs.isEmpty)
+    }
+
+    @Test("Bulk close deletes selected folders together with their tabs")
+    func bulkCloseDeletesSelectedFoldersWithTheirTabs() throws {
+        let viewModel = makeViewModel()
+        let grouped = try #require(viewModel.activeTab)
+        let groupID = viewModel.createTabGroup(title: "Work", containing: grouped.id)
+        viewModel.newTab()
+        let kept = try #require(viewModel.activeTab)
+
+        viewModel.toggleGroupSelection(groupID)
+        viewModel.closeSidebarSelection()
+
+        #expect(viewModel.tabGroups.isEmpty)
+        #expect(viewModel.tabs.map(\.id) == [kept.id])
+        #expect(viewModel.selectedGroupIDs.isEmpty)
     }
 
     private func makeViewModel() -> BrowserViewModel {

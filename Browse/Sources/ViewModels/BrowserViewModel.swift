@@ -32,6 +32,11 @@ final class BrowserViewModel {
     var tabs: [Tab] = []
     var tabGroups: [TabGroup] = []
     var activeTabID: UUID?
+    var selectedTabIDs: Set<UUID> = []
+    var selectedGroupIDs: Set<UUID> = []
+    /// +1 when the last workspace switch moved forward in the workspace list,
+    /// -1 when it moved backward. Drives the sidebar slide transition.
+    var workspaceSwitchDirection: Int = 1
     var isIntentBarFocused: Bool = false
     var intentBarFocusRequestID: Int = 0
     var isIntentBarVisible: Bool = true
@@ -221,10 +226,26 @@ final class BrowserViewModel {
         switchWorkspace(offset: -1)
     }
 
-    private func switchWorkspace(to id: UUID, savingCurrentWorkspaceState: Bool) {
+    private func switchWorkspace(
+        to id: UUID,
+        savingCurrentWorkspaceState: Bool,
+        direction: Int? = nil
+    ) {
         guard allowsStatePersistence else { return }
         guard id != activeWorkspaceID else { return }
         guard workspaces.contains(where: { $0.id == id }) else { return }
+
+        if let direction {
+            workspaceSwitchDirection = direction
+        } else if let currentIndex = workspaces.firstIndex(where: { $0.id == activeWorkspaceID }),
+           let targetIndex = workspaces.firstIndex(where: { $0.id == id }) {
+            workspaceSwitchDirection = targetIndex >= currentIndex ? 1 : -1
+        }
+        clearSidebarSelection()
+
+        // Favorites are shared across workspaces: carry the live tabs over
+        // instead of tearing them down and re-materializing.
+        let preservedFavoriteTabs = tabs.filter(\.isFavorite)
 
         if savingCurrentWorkspaceState {
             saveCurrentWorkspaceState()
@@ -237,10 +258,14 @@ final class BrowserViewModel {
         refreshWorkspaces()
 
         if let state = persistenceStore.loadWorkspaceState(forWorkspaceID: id),
-           applyPersistedState(state.withRegeneratedTabIdentity()) {
+           applyPersistedState(
+               state.withRegeneratedTabIdentity(),
+               preservedFavoriteTabs: preservedFavoriteTabs
+           ) {
             persistState()
         } else {
             resetInMemoryBrowsingState()
+            tabs = preservedFavoriteTabs
             newTab()
         }
     }
@@ -251,7 +276,12 @@ final class BrowserViewModel {
         guard let currentIndex = workspaces.firstIndex(where: { $0.id == activeWorkspaceID }) else { return }
 
         let nextIndex = (currentIndex + offset + workspaces.count) % workspaces.count
-        switchWorkspace(to: workspaces[nextIndex].id)
+        // Wrap-around switches should still slide in the direction of travel.
+        switchWorkspace(
+            to: workspaces[nextIndex].id,
+            savingCurrentWorkspaceState: true,
+            direction: offset >= 0 ? 1 : -1
+        )
     }
 
     private func refreshWorkspaces() {
@@ -345,7 +375,12 @@ final class BrowserViewModel {
             workspaces = persistenceStore.loadWorkspaces()
         }
 
-        if !restoresPersistedState || !restorePersistedState() {
+        if !restoresPersistedState {
+            newTab()
+        } else if !restorePersistedState() {
+            // Even without a restorable window/workspace state, the shared
+            // favorites still belong in the sidebar.
+            tabs = materializeGlobalFavorites()
             newTab()
         }
     }
@@ -368,6 +403,10 @@ final class BrowserViewModel {
     func closeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let closedTab = tabs[index]
+        if closedTab.isFavorite {
+            unloadFavoriteTab(closedTab, at: index)
+            return
+        }
         let affectedGroupIDs = Set([closedTab.groupID].compactMap { $0 })
         briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
         cancelLiveBriefingWork(for: closedTab)
@@ -392,29 +431,67 @@ final class BrowserViewModel {
         if let activeTab {
             loadStoredURLIfNeeded(for: activeTab)
         }
+        pruneSidebarSelection()
+        syncChatPanePresentationForActiveTab()
+        persistState()
+    }
+
+    /// Arc-style close for a favorite: keep the item in the sidebar but tear
+    /// down its live content so the next click reloads the saved URL fresh.
+    /// Only an explicit "Remove from Favorites" removes the item itself.
+    private func unloadFavoriteTab(_ tab: Tab, at index: Int) {
+        briefingScrollOffsetsByTabID.removeValue(forKey: tab.id)
+        cancelLiveBriefingWork(for: tab)
+        discardLiveWebView(for: tab)
+        selectedTabIDs.remove(tab.id)
+
+        if activeTabID == tab.id {
+            let remainingTabs = tabs.filter { $0.id != tab.id }
+            withAnimation(tabAnimation) {
+                if remainingTabs.isEmpty {
+                    activeTabID = nil
+                    isIntentBarVisible = true
+                    requestIntentBarFocus()
+                } else {
+                    let newIndex = min(index, remainingTabs.count - 1)
+                    activeTabID = remainingTabs[newIndex].id
+                    remainingTabs[newIndex].lastAccessedAt = Date()
+                }
+            }
+            if let activeTab {
+                loadStoredURLIfNeeded(for: activeTab)
+            }
+        }
         syncChatPanePresentationForActiveTab()
         persistState()
     }
 
     func closeOtherTabs(keeping id: UUID) {
         guard tabs.contains(where: { $0.id == id }) else { return }
-        let closedTabs = tabs.enumerated().filter { $0.element.id != id }
+        let closedTabs = tabs.enumerated().filter { $0.element.id != id && !$0.element.isFavorite }
+        let unloadedFavorites = tabs.filter { $0.id != id && $0.isFavorite }
         let affectedGroupIDs = Set(closedTabs.compactMap { $0.element.groupID })
         closedTabs.forEach { originalIndex, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
             cancelLiveBriefingWork(for: closedTab)
             rememberClosedTab(closedTab, at: originalIndex)
         }
+        unloadedFavorites.forEach { favorite in
+            briefingScrollOffsetsByTabID.removeValue(forKey: favorite.id)
+            cancelLiveBriefingWork(for: favorite)
+            discardLiveWebView(for: favorite)
+        }
 
         withAnimation(tabAnimation) {
-            tabs.removeAll { $0.id != id }
+            tabs.removeAll { $0.id != id && !$0.isFavorite }
             removeEmptyTabGroups(affectedGroupIDs)
             activeTabID = id
         }
-        tabs.first?.lastAccessedAt = Date()
+        tabs.first(where: { $0.id == id })?.lastAccessedAt = Date()
         if let activeTab {
             loadStoredURLIfNeeded(for: activeTab)
         }
+        pruneSidebarSelection()
         syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
@@ -425,18 +502,29 @@ final class BrowserViewModel {
         let closeRangeStart = tabs.index(after: index)
         guard closeRangeStart < tabs.endIndex else { return }
 
-        let closedTabs = Array(tabs[closeRangeStart...])
+        let closedTabs = tabs[closeRangeStart...].filter { !$0.isFavorite }
+        let unloadedFavorites = tabs[closeRangeStart...].filter(\.isFavorite)
+        guard !closedTabs.isEmpty || !unloadedFavorites.isEmpty else { return }
         let affectedGroupIDs = Set(closedTabs.compactMap(\.groupID))
         closedTabs.enumerated().forEach { offset, closedTab in
             briefingScrollOffsetsByTabID.removeValue(forKey: closedTab.id)
             cancelLiveBriefingWork(for: closedTab)
             rememberClosedTab(closedTab, at: closeRangeStart + offset)
         }
+        unloadedFavorites.forEach { favorite in
+            briefingScrollOffsetsByTabID.removeValue(forKey: favorite.id)
+            cancelLiveBriefingWork(for: favorite)
+            discardLiveWebView(for: favorite)
+        }
 
         withAnimation(tabAnimation) {
-            tabs.removeSubrange(closeRangeStart...)
+            let closedTabIDs = Set(closedTabs.map(\.id))
+            let unloadedFavoriteIDs = Set(unloadedFavorites.map(\.id))
+            tabs.removeAll { closedTabIDs.contains($0.id) }
             removeEmptyTabGroups(affectedGroupIDs)
-            if activeTabID != nil, !tabs.contains(where: { $0.id == activeTabID }) {
+            if let currentActiveTabID = activeTabID,
+               !tabs.contains(where: { $0.id == currentActiveTabID })
+                   || unloadedFavoriteIDs.contains(currentActiveTabID) {
                 activeTabID = id
             }
         }
@@ -444,6 +532,7 @@ final class BrowserViewModel {
         if let activeTab {
             loadStoredURLIfNeeded(for: activeTab)
         }
+        pruneSidebarSelection()
         syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
         persistState()
@@ -562,7 +651,104 @@ final class BrowserViewModel {
         tab.briefingViewModel?.cancelGeneration()
     }
 
+    // MARK: - Sidebar Multi-Selection
+
+    var sidebarSelectionCount: Int {
+        selectedTabIDs.count + selectedGroupIDs.count
+    }
+
+    @ObservationIgnored private var selectionAnchorTabID: UUID?
+
+    /// Cmd-click: toggle a tab in/out of the multi-selection. Starting a new
+    /// selection implicitly includes the active tab, following macOS
+    /// conventions.
+    func toggleTabSelection(_ id: UUID) {
+        guard tabs.contains(where: { $0.id == id }) else { return }
+        if selectedTabIDs.isEmpty, selectedGroupIDs.isEmpty,
+           let activeTabID, activeTabID != id {
+            selectedTabIDs.insert(activeTabID)
+        }
+        if selectedTabIDs.contains(id) {
+            selectedTabIDs.remove(id)
+        } else {
+            selectedTabIDs.insert(id)
+        }
+        selectionAnchorTabID = id
+    }
+
+    /// Cmd-click on a folder header: toggle the folder in/out of the selection.
+    func toggleGroupSelection(_ id: UUID) {
+        guard tabGroups.contains(where: { $0.id == id }) else { return }
+        if selectedGroupIDs.contains(id) {
+            selectedGroupIDs.remove(id)
+        } else {
+            selectedGroupIDs.insert(id)
+        }
+    }
+
+    /// Shift-click: select the visual range between the selection anchor
+    /// (or the active tab) and the clicked tab.
+    func extendTabSelection(to id: UUID) {
+        let orderedIDs = shortcutOrderedTabs.map(\.id)
+        guard let targetIndex = orderedIDs.firstIndex(of: id) else { return }
+        guard let anchorID = selectionAnchorTabID ?? activeTabID,
+              let anchorIndex = orderedIDs.firstIndex(of: anchorID) else {
+            selectedTabIDs.insert(id)
+            selectionAnchorTabID = id
+            return
+        }
+        let range = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
+        selectedTabIDs.formUnion(orderedIDs[range])
+    }
+
+    func clearSidebarSelection() {
+        selectedTabIDs = []
+        selectedGroupIDs = []
+        selectionAnchorTabID = nil
+    }
+
+    /// Bulk close: closes every selected tab (favorites are unloaded, not
+    /// removed) and deletes selected folders together with their tabs.
+    func closeSidebarSelection() {
+        let groupIDs = selectedGroupIDs
+        var tabIDs = selectedTabIDs
+        for groupID in groupIDs {
+            tabIDs.formUnion(tabs.filter { $0.groupID == groupID }.map(\.id))
+        }
+        clearSidebarSelection()
+        for id in tabIDs {
+            closeTab(id)
+        }
+        for groupID in groupIDs where tabGroups.contains(where: { $0.id == groupID }) {
+            deleteTabGroup(groupID)
+        }
+    }
+
+    /// Bulk move: moves every selected (non-pinned, non-favorite) tab into
+    /// the given folder, plus the tabs of any selected folders.
+    func moveSelectedTabs(toGroup groupID: UUID?) {
+        var tabIDs = selectedTabIDs
+        for selectedGroupID in selectedGroupIDs where selectedGroupID != groupID {
+            tabIDs.formUnion(tabs.filter { $0.groupID == selectedGroupID }.map(\.id))
+        }
+        clearSidebarSelection()
+        for id in tabIDs {
+            guard let tab = tabs.first(where: { $0.id == id }),
+                  !tab.isPinned, !tab.isFavorite else { continue }
+            moveTab(id, toGroup: groupID)
+        }
+    }
+
+    private func pruneSidebarSelection() {
+        selectedTabIDs.formIntersection(tabs.map(\.id))
+        selectedGroupIDs.formIntersection(tabGroups.map(\.id))
+        if let anchorID = selectionAnchorTabID, !tabs.contains(where: { $0.id == anchorID }) {
+            selectionAnchorTabID = nil
+        }
+    }
+
     func selectTab(_ id: UUID) {
+        clearSidebarSelection()
         withAnimation(.easeOut(duration: 0.16)) {
             activeTabID = id
         }
@@ -698,6 +884,10 @@ final class BrowserViewModel {
     func toggleFavorite(_ id: UUID) {
         guard let tab = tabs.first(where: { $0.id == id }) else { return }
         tab.isFavorite.toggle()
+        if tab.isFavorite {
+            // Favorites are global; folder membership is workspace-local.
+            tab.groupID = nil
+        }
         persistState()
     }
 
@@ -747,6 +937,7 @@ final class BrowserViewModel {
         guard let index = tabGroups.firstIndex(where: { $0.id == groupID }) else { return }
         tabs.filter { $0.groupID == groupID }.forEach { $0.groupID = nil }
         tabGroups.remove(at: index)
+        selectedGroupIDs.remove(groupID)
         persistState()
     }
 
@@ -1097,7 +1288,10 @@ final class BrowserViewModel {
         return applyPersistedState(persisted)
     }
 
-    private func applyPersistedState(_ persisted: PersistedBrowserState) -> Bool {
+    private func applyPersistedState(
+        _ persisted: PersistedBrowserState,
+        preservedFavoriteTabs: [Tab]? = nil
+    ) -> Bool {
         guard !persisted.tabs.isEmpty else { return false }
         pageChatSnapshotsByKey = [:]
         pageChatViewModelsByKey = [:]
@@ -1125,66 +1319,30 @@ final class BrowserViewModel {
             )
         }
         let validGroupIDs = Set(tabGroups.map(\.id))
-        let restoredActiveTabID = persisted.activeTabID.flatMap { id in
-            persisted.tabs.contains(where: { $0.id == id }) ? id : nil
-        } ?? persisted.tabs.first?.id
 
-        tabs = persisted.tabs.map { snapshot in
-            let tab = Tab(
-                id: snapshot.id,
-                kind: snapshot.kind,
-                title: snapshot.title,
-                url: snapshot.url,
-                groupID: snapshot.groupID.flatMap { validGroupIDs.contains($0) ? $0 : nil },
-                pageZoom: snapshot.pageZoom,
-                isFavorite: snapshot.isFavorite ?? false,
-                isPinned: snapshot.isPinned,
-                createdAt: snapshot.createdAt,
-                lastAccessedAt: snapshot.lastAccessedAt
-            )
-
-            if tab.kind == .web {
-                let webVM = WebTabViewModel(
-                    websiteDataStore: websiteDataStore,
-                    downloadManager: downloadManager,
-                    isPrivateBrowsing: isPrivateBrowsing,
-                    workspaceIDProvider: { [weak self] in self?.activeWorkspaceID },
-                    sitePermissionStore: sitePermissionStore
-                )
-                webVM.restorePageZoom(snapshot.pageZoom)
-                tab.webTabViewModel = webVM
-                let history = restoredNavigationHistory(from: snapshot)
-                let historyIndex = restoredNavigationHistoryIndex(from: snapshot, history: history)
-                webVM.restoreNavigationHistory(history, currentIndex: historyIndex)
-                wireWebTabState(for: tab, webVM: webVM)
-                if let url = restoredCurrentURL(from: snapshot, history: history, historyIndex: historyIndex) {
-                    tab.url = url
-                }
-            } else if tab.kind == .briefing {
-                let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
-                let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
-                let briefingVM = BriefingViewModel(
-                    query: snapshot.briefing?.document.query ?? snapshot.title,
-                    exaClient: exaClient,
-                    claudeClient: claudeClient
-                )
-
-                if let briefingSnapshot = snapshot.briefing {
-                    var document = briefingSnapshot.document
-                    document.isStreaming = false
-                    briefingVM.document = document
-                    briefingVM.phase = makeBriefingPhase(from: briefingSnapshot.phase)
-                    briefingVM.conversationHistory = briefingSnapshot.conversationHistory
-                }
-
-                tab.briefingViewModel = briefingVM
-                wireBriefingState(for: tab, briefingVM: briefingVM)
-            }
-
-            return tab
+        // Favorites are global (shared across workspaces): reuse the live
+        // favorite tabs across a workspace switch, or materialize them from
+        // the global store on first restore. Favorites still embedded in old
+        // snapshots (pre-migration data) are merged in, deduplicated by URL.
+        let favoriteSnapshots = persisted.tabs.filter { $0.isFavorite == true }
+        let standardSnapshots = persisted.tabs.filter { $0.isFavorite != true }
+        var favoriteTabs = preservedFavoriteTabs ?? materializeGlobalFavorites()
+        var favoriteKeys = Set(favoriteTabs.map(favoriteDedupeKey(for:)))
+        for snapshot in favoriteSnapshots {
+            guard !favoriteKeys.contains(snapshot.favoriteDedupeKey) else { continue }
+            favoriteKeys.insert(snapshot.favoriteDedupeKey)
+            favoriteTabs.append(makeRestoredTab(from: snapshot, validGroupIDs: []))
         }
 
-        activeTabID = restoredActiveTabID
+        tabs = favoriteTabs + standardSnapshots.map { snapshot in
+            makeRestoredTab(from: snapshot, validGroupIDs: validGroupIDs)
+        }
+
+        activeTabID = persisted.activeTabID.flatMap { id in
+            tabs.contains(where: { $0.id == id }) ? id : nil
+        }
+            ?? tabs.first(where: { !$0.isFavorite })?.id
+            ?? tabs.first?.id
 
         isTabBarVisible = persisted.isTabBarVisible
         tabBarWidth = max(180, min(CGFloat(persisted.tabBarWidth), 360))
@@ -1212,8 +1370,97 @@ final class BrowserViewModel {
         return true
     }
 
+    /// Builds a live Tab (including its web/briefing view model) from a
+    /// persisted snapshot. When `regeneratesID` is set the tab gets a fresh
+    /// identity, which global favorites need so multiple windows never share
+    /// tab IDs.
+    private func makeRestoredTab(
+        from snapshot: PersistedTabSnapshot,
+        validGroupIDs: Set<UUID>,
+        regeneratesID: Bool = false
+    ) -> Tab {
+        let tab = Tab(
+            id: regeneratesID ? UUID() : snapshot.id,
+            kind: snapshot.kind,
+            title: snapshot.title,
+            url: snapshot.url,
+            groupID: snapshot.groupID.flatMap { validGroupIDs.contains($0) ? $0 : nil },
+            pageZoom: snapshot.pageZoom,
+            isFavorite: snapshot.isFavorite ?? false,
+            isPinned: snapshot.isPinned,
+            createdAt: snapshot.createdAt,
+            lastAccessedAt: snapshot.lastAccessedAt
+        )
+
+        if tab.kind == .web {
+            let webVM = WebTabViewModel(
+                websiteDataStore: websiteDataStore,
+                downloadManager: downloadManager,
+                isPrivateBrowsing: isPrivateBrowsing,
+                workspaceIDProvider: { [weak self] in self?.activeWorkspaceID },
+                sitePermissionStore: sitePermissionStore
+            )
+            webVM.restorePageZoom(snapshot.pageZoom)
+            tab.webTabViewModel = webVM
+            let history = restoredNavigationHistory(from: snapshot)
+            let historyIndex = restoredNavigationHistoryIndex(from: snapshot, history: history)
+            webVM.restoreNavigationHistory(history, currentIndex: historyIndex)
+            wireWebTabState(for: tab, webVM: webVM)
+            if let url = restoredCurrentURL(from: snapshot, history: history, historyIndex: historyIndex) {
+                tab.url = url
+            }
+        } else if tab.kind == .briefing {
+            let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
+            let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
+            let briefingVM = BriefingViewModel(
+                query: snapshot.briefing?.document.query ?? snapshot.title,
+                exaClient: exaClient,
+                claudeClient: claudeClient
+            )
+
+            if let briefingSnapshot = snapshot.briefing {
+                var document = briefingSnapshot.document
+                document.isStreaming = false
+                briefingVM.document = document
+                briefingVM.phase = makeBriefingPhase(from: briefingSnapshot.phase)
+                briefingVM.conversationHistory = briefingSnapshot.conversationHistory
+            }
+
+            tab.briefingViewModel = briefingVM
+            wireBriefingState(for: tab, briefingVM: briefingVM)
+        }
+
+        return tab
+    }
+
+    // MARK: - Global Favorites
+
+    /// Materializes the shared (cross-workspace) favorites from the store.
+    private func materializeGlobalFavorites() -> [Tab] {
+        guard allowsStatePersistence else { return [] }
+        return persistenceStore.loadGlobalFavorites().map { snapshot in
+            makeRestoredTab(from: snapshot, validGroupIDs: [], regeneratesID: true)
+        }
+    }
+
+    private func favoriteDedupeKey(for tab: Tab) -> String {
+        (tab.webTabViewModel?.currentURL ?? tab.url)?.absoluteString
+            ?? "\(tab.kind.rawValue):\(tab.title)"
+    }
+
+    private func makeGlobalFavoriteSnapshots() -> [PersistedTabSnapshot] {
+        tabs.filter(\.isFavorite).map(makePersistedTabSnapshot)
+    }
+
+    private func persistGlobalFavorites() {
+        guard allowsStatePersistence else { return }
+        persistenceStore.saveGlobalFavorites(makeGlobalFavoriteSnapshots())
+    }
+
     private func makePersistedState() -> PersistedBrowserState {
-        let tabSnapshots = tabs.map(makePersistedTabSnapshot)
+        // Favorites are shared across all workspaces and persisted separately
+        // in the global favorites store, never inside workspace snapshots.
+        let tabSnapshots = tabs.filter { !$0.isFavorite }.map(makePersistedTabSnapshot)
         return PersistedBrowserState(
             tabs: tabSnapshots,
             tabGroups: tabGroups.map { group in
@@ -1265,11 +1512,13 @@ final class BrowserViewModel {
             workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
         }
         persistenceStore.save(state, forWindowID: windowID, workspaceID: activeWorkspaceID)
+        persistGlobalFavorites()
         refreshWorkspaces()
     }
 
     private func saveCurrentWorkspaceState() {
         guard allowsStatePersistence else { return }
+        persistGlobalFavorites()
         let state = makePersistedState()
         if state.isRestorableWindowState {
             workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
@@ -1282,7 +1531,9 @@ final class BrowserViewModel {
     }
 
     private func discardLiveTabsForWorkspaceSwitch() {
-        tabs.forEach { tab in
+        // Favorites are shared across workspaces and stay alive across a
+        // switch, so only workspace-local tabs are torn down.
+        tabs.filter { !$0.isFavorite }.forEach { tab in
             cancelLiveBriefingWork(for: tab)
             discardLiveWebView(for: tab)
         }
@@ -1292,6 +1543,7 @@ final class BrowserViewModel {
         tabs = []
         tabGroups = []
         activeTabID = nil
+        clearSidebarSelection()
         recentlyClosedTabs = []
         briefingScrollOffsetsByTabID = [:]
         pageChatSnapshotsByKey = [:]

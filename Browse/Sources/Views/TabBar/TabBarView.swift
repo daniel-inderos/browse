@@ -17,6 +17,9 @@ struct TabBarView: View {
     @State private var isRenameWorkspaceAlertPresented = false
     @State private var pendingNewWorkspaceName = ""
     @State private var isCreateWorkspaceAlertPresented = false
+    @State private var isWorkspaceSwitcherPresented = false
+    @State private var isPointerOverTabList = false
+    @State private var workspaceSwipeProgress: CGFloat = 0
 
     // Row-height estimates (padding + content + spacing) used as swap thresholds.
     private let compactRowHeight: CGFloat = 26
@@ -27,6 +30,7 @@ struct TabBarView: View {
         removal: .move(edge: .leading).combined(with: .opacity)
     )
     private let tabListAnimation = Animation.spring(response: 0.26, dampingFraction: 0.86)
+    private let workspaceSwitchAnimation = Animation.spring(response: 0.22, dampingFraction: 0.9)
 
     // MARK: - Sectioned Tab Lists
 
@@ -134,7 +138,14 @@ struct TabBarView: View {
                 .animation(tabListAnimation, value: browserVM.tabs.map(\.isFavorite))
                 .animation(tabListAnimation, value: browserVM.tabs.map(\.groupID))
                 .animation(tabListAnimation, value: browserVM.tabGroups)
+                // Tracks whether the pointer is on tab content so horizontal
+                // swipes only switch workspaces from the sidebar's empty area.
+                .onHover { isPointerOverTabList = $0 }
             }
+            .id(browserVM.activeWorkspaceID)
+            .transition(workspaceSlideTransition)
+            .offset(x: workspaceSwipeProgress * 36)
+            .opacity(1 - Double(abs(workspaceSwipeProgress)) * 0.08)
 
             Spacer(minLength: 0)
 
@@ -144,7 +155,22 @@ struct TabBarView: View {
 
             bottomToolbar
         }
+        .animation(workspaceSwitchAnimation, value: browserVM.activeWorkspaceID)
         .background(BrowseColor.tabBarBackground)
+        .background(
+            WorkspaceSwipeMonitor(
+                isPointerOverTabList: isPointerOverTabList,
+                isEnabled: !browserVM.isPrivateBrowsing && browserVM.workspaces.count > 1,
+                onSwipeProgress: { updateWorkspaceSwipeProgress($0) },
+                onSwipeEnd: { settleWorkspaceSwipe() },
+                onSwipeLeft: {
+                    commitWorkspaceSwipe { browserVM.selectNextWorkspace() }
+                },
+                onSwipeRight: {
+                    commitWorkspaceSwipe { browserVM.selectPreviousWorkspace() }
+                }
+            )
+        )
         .alert("Rename Folder", isPresented: $isRenameGroupAlertPresented) {
             TextField("Folder Name", text: $pendingGroupTitle)
             Button("Cancel", role: .cancel) {}
@@ -180,60 +206,52 @@ struct TabBarView: View {
 
     // MARK: - Section Components
 
+    /// Slides the tab list toward the direction of the workspace switch.
+    private var workspaceSlideTransition: AnyTransition {
+        let isForward = browserVM.workspaceSwitchDirection >= 0
+        return .asymmetric(
+            insertion: .offset(x: isForward ? 36 : -36).combined(with: .opacity),
+            removal: .offset(x: isForward ? -36 : 36).combined(with: .opacity)
+        )
+    }
+
+    private func updateWorkspaceSwipeProgress(_ progress: CGFloat) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            workspaceSwipeProgress = progress
+        }
+    }
+
+    private func settleWorkspaceSwipe() {
+        withAnimation(workspaceSwitchAnimation) {
+            workspaceSwipeProgress = 0
+        }
+    }
+
+    private func commitWorkspaceSwipe(_ switchWorkspace: () -> Void) {
+        withAnimation(workspaceSwitchAnimation) {
+            workspaceSwipeProgress = 0
+            switchWorkspace()
+        }
+    }
+
     private var workspaceDock: some View {
         HStack(spacing: 6) {
-            Menu {
-                Section("Switch Workspace") {
-                    ForEach(browserVM.workspaces) { workspace in
-                        Button {
-                            browserVM.switchWorkspace(to: workspace.id)
-                        } label: {
-                            Label(
-                                workspace.name,
-                                systemImage: workspace.id == browserVM.activeWorkspaceID
-                                    ? "checkmark.circle.fill"
-                                    : (workspace.iconName ?? "square.grid.2x2")
-                            )
-                        }
-                    }
-                }
-
-                Divider()
-
-                Button {
-                    beginCreatingWorkspace()
-                } label: {
-                    Label("New Workspace", systemImage: "plus")
-                }
-
-                if let activeWorkspace = browserVM.activeWorkspace {
-                    Section("Current Workspace") {
-                        Button {
-                            beginRenaming(activeWorkspace)
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-
-                        Button {
-                            browserVM.duplicateWorkspace(activeWorkspace.id)
-                        } label: {
-                            Label("Duplicate", systemImage: "doc.on.doc")
-                        }
-
-                        Button(role: .destructive) {
-                            browserVM.deleteWorkspace(activeWorkspace.id)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                        .disabled(activeWorkspace.isDefault)
-                    }
-                }
+            Button {
+                isWorkspaceSwitcherPresented.toggle()
             } label: {
                 workspacePill(browserVM.activeWorkspace)
             }
             .buttonStyle(.plain)
-            .menuStyle(.borderlessButton)
             .help("Switch Workspace")
+            .popover(isPresented: $isWorkspaceSwitcherPresented, arrowEdge: .top) {
+                WorkspaceSwitcherView(
+                    onRename: { beginRenaming($0) },
+                    onCreate: { beginCreatingWorkspace() },
+                    onDismiss: { isWorkspaceSwitcherPresented = false }
+                )
+            }
 
             Button {
                 beginCreatingWorkspace()
@@ -348,7 +366,7 @@ struct TabBarView: View {
     }
 
     private func workspacePill(_ workspace: PersistedWorkspace?) -> some View {
-        let accent = workspaceAccentColor(for: workspace)
+        let accent = workspace?.accentColor ?? BrowseColor.accent
         return HStack(spacing: 7) {
             ZStack {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -390,25 +408,6 @@ struct TabBarView: View {
         .contentShape(Rectangle())
     }
 
-    private func workspaceAccentColor(for workspace: PersistedWorkspace?) -> Color {
-        switch workspace?.colorName {
-        case "blue":
-            return .blue
-        case "green":
-            return .green
-        case "orange":
-            return .orange
-        case "pink":
-            return .pink
-        case "purple":
-            return .purple
-        case "teal":
-            return .teal
-        default:
-            return BrowseColor.accent
-        }
-    }
-
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
             .font(BrowseFont.badge)
@@ -430,9 +429,13 @@ struct TabBarView: View {
     private func tabGroupSection(_ group: TabGroup) -> some View {
         let tabs = groupedTabs(for: group)
         let isDropTargeted = dropTargetGroupID == group.id
+        let isMultiSelected = browserVM.selectedGroupIDs.contains(group.id)
 
         return VStack(spacing: 2) {
             Button {
+                // Modified clicks never reach a Button action on macOS;
+                // they are handled by the high-priority tap gestures below.
+                guard !NSEvent.modifierFlags.contains(.command) else { return }
                 browserVM.toggleTabGroupCollapsed(group.id)
             } label: {
                 HStack(spacing: 6) {
@@ -457,11 +460,27 @@ struct TabBarView: View {
                 .padding(.bottom, 3)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isDropTargeted ? BrowseColor.accent.opacity(0.10) : Color.clear)
+                        .fill(
+                            isMultiSelected
+                                ? BrowseColor.accent.opacity(0.14)
+                                : (isDropTargeted ? BrowseColor.accent.opacity(0.10) : Color.clear)
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(
+                            isMultiSelected ? BrowseColor.accent.opacity(0.45) : Color.clear,
+                            lineWidth: 1
+                        )
                 )
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .highPriorityGesture(
+                TapGesture().modifiers(.command).onEnded {
+                    browserVM.toggleGroupSelection(group.id)
+                }
+            )
             .dropDestination(for: String.self) { items, _ in
                 guard let draggedTabID = draggedTabID(from: items) else { return false }
                 return moveDraggedTab(draggedTabID, to: group.id)
@@ -473,6 +492,15 @@ struct TabBarView: View {
                 }
             }
             .contextMenu {
+                if isMultiSelected, browserVM.sidebarSelectionCount > 1 {
+                    Button("Close \(browserVM.sidebarSelectionCount) Selected Items") {
+                        browserVM.closeSidebarSelection()
+                    }
+                    Button("Clear Selection") {
+                        browserVM.clearSidebarSelection()
+                    }
+                    Divider()
+                }
                 Button("Rename Folder") {
                     beginRenaming(group)
                 }
@@ -533,13 +561,39 @@ struct TabBarView: View {
 
     // MARK: - Tab Item with Drag-to-Reorder
 
+    /// Plain click: activates the tab and clears any multi-selection.
+    /// Cmd/Shift-clicks are recognized by the high-priority tap gestures in
+    /// `selectionGestures(for:)`; the guard keeps a Button-action fallback
+    /// from double-handling them.
+    private func handleTabClick(_ tab: Tab) {
+        let modifiers = NSEvent.modifierFlags
+        guard !modifiers.contains(.command), !modifiers.contains(.shift) else { return }
+        browserVM.selectTab(tab.id)
+    }
+
+    /// Cmd-click toggles the tab in/out of the selection; Shift-click extends
+    /// the range. Attached as high-priority gestures because modified clicks
+    /// must be recognized by the gesture system itself, ahead of the row's
+    /// Button, to work reliably on macOS.
+    private func selectionGestures(for tab: Tab) -> some Gesture {
+        TapGesture().modifiers(.command)
+            .onEnded {
+                browserVM.toggleTabSelection(tab.id)
+            }
+            .exclusively(
+                before: TapGesture().modifiers(.shift).onEnded {
+                    browserVM.extendTabSelection(to: tab.id)
+                }
+            )
+    }
+
     private func favoriteTabItem(_ tab: Tab) -> some View {
         FavoriteTabItemView(
             tab: tab,
             isActive: tab.id == browserVM.activeTabID,
             onSelect: {
                 guard draggingTabID == nil else { return }
-                browserVM.selectTab(tab.id)
+                handleTabClick(tab)
             },
             onClose: { browserVM.closeTab(tab.id) },
             onCloseOthers: { browserVM.closeOtherTabs(keeping: tab.id) },
@@ -552,8 +606,10 @@ struct TabBarView: View {
             },
             onDuplicate: { browserVM.duplicateTab(tab.id) },
             onTogglePin: { browserVM.togglePin(tab.id) },
-            onToggleFavorite: { browserVM.toggleFavorite(tab.id) }
+            onToggleFavorite: { browserVM.toggleFavorite(tab.id) },
+            isMultiSelected: browserVM.selectedTabIDs.contains(tab.id)
         )
+        .highPriorityGesture(selectionGestures(for: tab))
     }
 
     private func tabItem(_ tab: Tab, compact: Bool) -> some View {
@@ -563,12 +619,13 @@ struct TabBarView: View {
         return TabItemView(
             tab: tab,
             isActive: tab.id == browserVM.activeTabID,
+            isMultiSelected: browserVM.selectedTabIDs.contains(tab.id),
             compact: compact,
             onSelect: {
                 // Suppress selection while a drag is active to avoid
                 // the Button firing on mouse-up at the end of a drag.
                 guard draggingTabID == nil else { return }
-                browserVM.selectTab(tab.id)
+                handleTabClick(tab)
             },
             onClose: { browserVM.closeTab(tab.id) },
             onCloseOthers: { browserVM.closeOtherTabs(keeping: tab.id) },
@@ -584,7 +641,11 @@ struct TabBarView: View {
             onToggleFavorite: { browserVM.toggleFavorite(tab.id) },
             tabGroups: browserVM.tabGroups,
             onCreateFolderFromTab: { browserVM.createTabGroup(containing: tab.id) },
-            onMoveToGroup: { browserVM.moveTab(tab.id, toGroup: $0) }
+            onMoveToGroup: { browserVM.moveTab(tab.id, toGroup: $0) },
+            selectionCount: browserVM.sidebarSelectionCount,
+            onCloseSelection: { browserVM.closeSidebarSelection() },
+            onMoveSelectionToGroup: { browserVM.moveSelectedTabs(toGroup: $0) },
+            onClearSelection: { browserVM.clearSidebarSelection() }
         )
         // --- Visual feedback for the dragged item ---
         .offset(y: isDragging ? dragOffset : 0)
@@ -602,6 +663,7 @@ struct TabBarView: View {
             isDragging ? nil : tabListAnimation,
             value: browserVM.tabs.map(\.id)
         )
+        .highPriorityGesture(selectionGestures(for: tab))
         .draggable(tab.id.uuidString)
         .simultaneousGesture(reorderGesture(for: tab, rowHeight: rowHeight))
     }
