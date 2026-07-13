@@ -129,6 +129,7 @@ private struct WindowSessionRestorer: View {
 struct BrowserWindow: View {
     @State private var browserVM: BrowserViewModel
     @State private var sidebarResizeStartWidth: CGFloat?
+    @State private var sidebarResizeWidth: CGFloat?
     @State private var navigationKeyEventMonitor: Any?
     @State private var isIntentBarTextFocused = false
     @State private var pageContentOpacity: Double = 1
@@ -136,6 +137,8 @@ struct BrowserWindow: View {
     private let configuration: BrowserWindowConfiguration
     private let intentBarHeight: CGFloat = 42
     private let intentBarRevealHoverHeight: CGFloat = 120
+    private let sidebarMinWidth: CGFloat = 180
+    private let sidebarMaxWidth: CGFloat = 360
     private let sidebarFadeAnimation: Animation = .easeOut(duration: 0.22)
     private let pageFadeAnimation: Animation = .easeOut(duration: 0.18)
 
@@ -155,7 +158,7 @@ struct BrowserWindow: View {
             // Vertical sidebar with tabs (Arc-style)
             if browserVM.isTabBarVisible {
                 TabBarView()
-                    .frame(width: browserVM.tabBarWidth)
+                    .frame(width: sidebarResizeWidth ?? browserVM.tabBarWidth)
                     .overlay(alignment: .trailing) {
                         sidebarResizeHandle
                     }
@@ -357,11 +360,22 @@ struct BrowserWindow: View {
                         }
 
                         if let startWidth = sidebarResizeStartWidth {
-                            browserVM.setTabBarWidth(startWidth + value.translation.width)
+                            var transaction = Transaction(animation: nil)
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                sidebarResizeWidth = max(
+                                    sidebarMinWidth,
+                                    min(startWidth + value.translation.width, sidebarMaxWidth)
+                                )
+                            }
                         }
                     }
                     .onEnded { _ in
+                        if let sidebarResizeWidth {
+                            browserVM.setTabBarWidth(sidebarResizeWidth)
+                        }
                         sidebarResizeStartWidth = nil
+                        sidebarResizeWidth = nil
                     }
             )
             .onHover { isHovering in
