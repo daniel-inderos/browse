@@ -398,6 +398,29 @@ struct BrowserViewModelTests {
         #expect(viewModel.tabs.first?.title == "Research Workspace")
     }
 
+    @Test("Switching workspaces preserves folders containing blank tabs")
+    func switchingWorkspacesPreservesFoldersContainingBlankTabs() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let viewModel = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: BrowserPersistenceStore(directoryURL: directory)
+        )
+        let defaultWorkspaceID = viewModel.activeWorkspaceID
+        let blankTabID = try #require(viewModel.activeTabID)
+        viewModel.createTabGroup(title: "Ideas", containing: blankTabID)
+
+        viewModel.createWorkspace(named: "Research")
+        viewModel.switchWorkspace(to: defaultWorkspaceID)
+
+        #expect(viewModel.tabGroups.map(\.title) == ["Ideas"])
+        #expect(viewModel.tabs.first?.groupID == viewModel.tabGroups.first?.id)
+    }
+
     @Test("Switching workspaces preserves the current sidebar width")
     func switchingWorkspacesPreservesCurrentSidebarWidth() throws {
         let directory = FileManager.default.temporaryDirectory

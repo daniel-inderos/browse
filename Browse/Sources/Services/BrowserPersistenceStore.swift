@@ -2015,7 +2015,7 @@ private func columnOptionalDate(_ statement: OpaquePointer, at index: Int32) -> 
 
 extension PersistedBrowserState {
     var isRestorableWindowState: Bool {
-        tabs.contains { snapshot in
+        tabGroups?.isEmpty == false || tabs.contains { snapshot in
             switch snapshot.kind {
             case .briefing:
                 return true
