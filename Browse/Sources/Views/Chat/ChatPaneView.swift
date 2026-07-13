@@ -176,7 +176,7 @@ struct ChatPaneView: View {
                 .font(.system(size: 15, weight: .medium, design: .serif))
                 .foregroundStyle(.secondary)
 
-            Text("Claude can read the page content and answer your questions.")
+            Text("OpenAI can read the page content and answer your questions.")
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(.quaternary)
                 .lineSpacing(2)

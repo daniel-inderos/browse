@@ -73,6 +73,6 @@ struct ChatViewModelTests {
     }
 
     private func makeViewModel() -> ChatViewModel {
-        ChatViewModel(claudeClient: ClaudeAPIClient(getAPIKey: { nil }))
+        ChatViewModel(openAIClient: OpenAIAPIClient(getAPIKey: { nil }))
     }
 }

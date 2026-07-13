@@ -74,7 +74,7 @@ The intent bar is the primary input surface. It accepts URLs, domains, search qu
 Briefings turn a natural-language question into an editorial research page.
 
 - Exa Search API fetches web sources and page content.
-- Claude streams a synthesized briefing from the retrieved sources using
+- GPT-5.6 Terra streams a synthesized briefing through the OpenAI Responses API using
   structured outputs, so the response is schema-guaranteed JSON.
 - A tolerant partial-JSON parser renders fields as they stream:
   - headline
@@ -88,11 +88,11 @@ Briefings turn a natural-language question into an editorial research page.
 
 ### Page Chat
 
-Page chat lets the user ask Claude questions about the currently loaded web page.
+Page chat lets the user ask OpenAI questions about the currently loaded web page.
 
 - Opens as a right-side pane beside the current web page.
 - Extracts up to 12,000 characters from `document.body.innerText`.
-- Sends page URL, page title, and extracted content in Claude's system prompt.
+- Sends page URL, page title, and extracted content in OpenAI's system prompt.
 - Streams Markdown responses.
 - Stores chat history per page in normal browsing.
 - Allows clearing chat for the current page.
@@ -106,17 +106,17 @@ The Settings window includes:
 - Custom accent color picker.
 - Search suggestion privacy controls.
 - Private-window visual privacy controls for Google favicon fallback and briefing source images.
-- Claude API key input and connection test.
+- OpenAI API key input and connection test.
 - Exa API key input and connection test.
-- Links to the Anthropic Console and Exa dashboard.
+- Links to the OpenAI Console and Exa dashboard.
 
 ## Requirements
 
 - macOS 15 or newer.
 - Xcode with Swift 6 support.
-- Network access for web browsing, search suggestions, favicons, Exa, and Claude.
+- Network access for web browsing, search suggestions, favicons, Exa, and OpenAI.
 - API keys for AI features:
-  - Anthropic Claude API key
+  - OpenAI API key
   - Exa API key
 
 The core browser shell can run without API keys, but briefings and page chat require the relevant keys.
@@ -159,20 +159,19 @@ cp .env.example .env
 Then fill in:
 
 ```text
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
+OPENAI_API_KEY=your_openai_api_key_here
 EXA_API_KEY=your_exa_api_key_here
 ```
 
 The keys are used for:
 
-- `ANTHROPIC_API_KEY`: briefing synthesis, briefing follow-ups, and page chat.
+- `OPENAI_API_KEY`: briefing synthesis, briefing follow-ups, and page chat.
 - `EXA_API_KEY`: web source retrieval for briefings.
 
 `APIKeyStore` also accepts these aliases:
 
 ```text
-BROWSE_CLAUDE_API_KEY
-CLAUDE_API_KEY
+BROWSE_OPENAI_API_KEY
 BROWSE_EXA_API_KEY
 ```
 
@@ -247,7 +246,7 @@ Inline citations such as `[[1]](cite://1)` are resolved to the corresponding sou
 
 ### Asking Follow-Ups
 
-After a briefing completes, use the follow-up bar at the bottom of the briefing page. Follow-ups are sent to Claude with the original query and generated briefing as context.
+After a briefing completes, use the follow-up bar at the bottom of the briefing page. Follow-ups are sent to OpenAI with the original query and generated briefing as context.
 
 Follow-up answers render as continuation sections below the source shelf. While a follow-up streams, Browse follows the latest answer unless the user scrolls away from the bottom.
 
@@ -264,7 +263,7 @@ The chat pane supports:
 - clearing chat history for the current page
 - width resizing
 
-The chat prompt asks Claude to answer based on the current page. If the user asks about something not present on the page, the prompt instructs Claude to say so.
+The chat prompt asks OpenAI to answer based on the current page. If the user asks about something not present on the page, the prompt instructs OpenAI to say so.
 
 ### Managing Tabs
 
@@ -359,7 +358,7 @@ flowchart TD
     F --> G["WKWebView"]
     E --> H["ExaAPIClient"]
     H --> I["BriefingComposer"]
-    I --> J["ClaudeAPIClient"]
+    I --> J["OpenAIAPIClient"]
     J --> K["BriefingViewModel"]
     K --> L["BriefingPageView"]
 ```
@@ -370,7 +369,7 @@ flowchart TD
 flowchart TD
     A["Web Tab"] --> B["Extract document.body.innerText"]
     B --> C["ChatViewModel"]
-    C --> D["ClaudeAPIClient streaming messages"]
+    C --> D["OpenAIAPIClient streaming messages"]
     D --> E["ChatPaneView"]
     C --> F["Page chat snapshots"]
     F --> G["BrowserPersistenceStore"]
@@ -408,9 +407,9 @@ The main scene is a `WindowGroup` keyed by `BrowserWindowConfiguration`. A separ
 | `Services/FaviconService.swift` | Favicon URL normalization, Google S2 fallback, direct favicon support, caching, and private-mode fetching. |
 | `Services/ExaAPIClient.swift` | Exa search requests and connection checks. |
 | `Services/ExaTypes.swift` | Exa request and response types. |
-| `Services/ClaudeAPIClient.swift` | Anthropic Messages API requests, streaming response handling, and connection checks. |
-| `Services/ClaudeStreamParser.swift` | Server-Sent Events parser for Claude streaming events. |
-| `Services/ClaudeTypes.swift` | Claude request, message, and stream payload types. |
+| `Services/OpenAIAPIClient.swift` | OpenAI Responses API requests for GPT-5.6 Terra, streaming response handling, and connection checks. |
+| `Services/OpenAIStreamParser.swift` | Server-Sent Events parser for OpenAI streaming events. |
+| `Services/OpenAITypes.swift` | OpenAI request, message, and stream payload types. |
 | `Services/BriefingComposer.swift` | System prompts and user messages for initial briefings and follow-ups. |
 | `Services/BriefingCitationResolver.swift` | Resolves `cite://N` links to source URLs. |
 | `Services/BrowserPersistenceStore.swift` | SQLite persistence for windows, tabs, briefings, navigation history, chat geometry, page chats, and AI conversation history. |
@@ -423,8 +422,8 @@ The main scene is a `WindowGroup` keyed by `BrowserWindowConfiguration`. A separ
 | `ViewModels/BrowserViewModel.swift` | Main coordinator for tabs, windows, intent handling, chat pane state, persistence, and navigation commands. |
 | `ViewModels/WebTabViewModel.swift` | WKWebView owner, navigation state, scroll tracking, page content extraction, and navigation history snapshots. |
 | `ViewModels/IntentBarViewModel.swift` | Intent bar text, delayed classification, autocomplete, and Search/Brief override mode. |
-| `ViewModels/BriefingViewModel.swift` | Exa search, Claude streaming, briefing parsing, phase tracking, and follow-up streaming. |
-| `ViewModels/ChatViewModel.swift` | Page-aware chat context, streaming Claude responses, errors, and conversation history. |
+| `ViewModels/BriefingViewModel.swift` | Exa search, OpenAI streaming, briefing parsing, phase tracking, and follow-up streaming. |
+| `ViewModels/ChatViewModel.swift` | Page-aware chat context, streaming OpenAI responses, errors, and conversation history. |
 | `ViewModels/SettingsViewModel.swift` | API key loading/saving and connection tests. |
 
 ### Views
@@ -457,7 +456,7 @@ Browse treats the repository as suitable for public/open-source development. Run
 
 | Data | Storage |
 | --- | --- |
-| Claude and Exa API keys | Local `.env` file or process environment variables |
+| OpenAI and Exa API keys | Local `.env` file or process environment variables |
 | Accent color | UserDefaults key `accentColorHex` |
 | Google autocomplete preference | UserDefaults key `remoteGoogleSearchAutocompleteEnabled` |
 | Private Google S2 favicon preference | UserDefaults key `privacy.privateGoogleS2FaviconFallbackEnabled` |
@@ -527,7 +526,7 @@ Browse uses the network for both browser content and app services.
 | Favicons | Direct favicon URL or Google S2 favicon service in normal windows; direct/first-party by default in private windows | `FaviconService` |
 | Briefing source images | Source image URLs returned by Exa, loaded by `AsyncImage` when allowed | `BriefingImageCarousel` |
 | Briefing source search | `https://api.exa.ai/search` | `ExaAPIClient` |
-| AI generation and chat | `https://api.anthropic.com/v1/messages` | `ClaudeAPIClient` |
+| AI generation and chat | `https://api.openai.com/v1/responses` | `OpenAIAPIClient` |
 
 `Info.plist` allows arbitrary loads because this is a browser and must be able to load arbitrary user-entered web destinations.
 
@@ -562,7 +561,7 @@ Current tests cover:
 - favicon request normalization.
 - briefing citation resolution.
 
-The existing tests do not perform live Claude, Exa, WebKit page-load, or UI automation calls.
+The existing tests do not perform live OpenAI, Exa, WebKit page-load, or UI automation calls.
 
 ## Community
 
@@ -623,7 +622,7 @@ Briefing generation flows through:
 2. `BriefingViewModel.generate`
 3. `ExaAPIClient.search`
 4. `BriefingComposer`
-5. `ClaudeAPIClient.streamMessage`
+5. `OpenAIAPIClient.streamMessage`
 6. streamed Markdown parsing in `BriefingViewModel`
 7. `BriefingPageView`
 
@@ -637,7 +636,7 @@ Page chat flows through:
 2. `BrowserViewModel.updateChatContextIfNeeded`
 3. `WebTabViewModel.extractPageContent`
 4. `ChatViewModel.sendMessage`
-5. `ClaudeAPIClient.streamMessage`
+5. `OpenAIAPIClient.streamMessage`
 6. `ChatPaneView`
 
 Per-page chat persistence depends on `URL.chatSessionKey`; update tests if that keying behavior changes.
@@ -654,7 +653,7 @@ The app emits OSLog diagnostic messages for:
 
 - lifecycle and coarse signing state
 - Exa search start/failure/count
-- Claude request and streaming status
+- OpenAI request and streaming status
 - SSE decoding issues
 - persistence failures
 - page content extraction failures
@@ -665,15 +664,15 @@ Diagnostics must not include raw user queries, page content, generated AI output
 
 ### Briefings or Chat Say an API Key Is Missing
 
-Copy `.env.example` to `.env`, fill in `ANTHROPIC_API_KEY` and `EXA_API_KEY`, then restart the app. Settings shows the detected values and provides Test Connection buttons.
+Copy `.env.example` to `.env`, fill in `OPENAI_API_KEY` and `EXA_API_KEY`, then restart the app. Settings shows the detected values and provides Test Connection buttons.
 
 ### Briefing Search Fails
 
 Check the Exa API key and network access. The app shows the API error message in the briefing error state and offers Try Again.
 
-### Claude Streaming Fails
+### OpenAI Streaming Fails
 
-Check the Claude API key, model availability, and network access. Model selection is centralized in `ClaudeAPIClient`.
+Check the OpenAI API key, model availability, and network access. Model selection is centralized in `OpenAIAPIClient`.
 
 ### Autocomplete Does Not Show Remote Suggestions
 

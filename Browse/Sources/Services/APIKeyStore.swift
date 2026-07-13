@@ -127,13 +127,13 @@ struct APIKeyStore: @unchecked Sendable {
     private static let store = Store()
 
     enum Key {
-        case claudeAPIKey
+        case openAIAPIKey
         case exaAPIKey
 
         var environmentNames: [String] {
             switch self {
-            case .claudeAPIKey:
-                return ["ANTHROPIC_API_KEY", "BROWSE_CLAUDE_API_KEY", "CLAUDE_API_KEY"]
+            case .openAIAPIKey:
+                return ["OPENAI_API_KEY", "BROWSE_OPENAI_API_KEY"]
             case .exaAPIKey:
                 return ["EXA_API_KEY", "BROWSE_EXA_API_KEY"]
             }

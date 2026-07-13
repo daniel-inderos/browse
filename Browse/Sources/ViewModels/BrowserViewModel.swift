@@ -571,11 +571,11 @@ final class BrowserViewModel {
             )
             if let sourceBriefingVM = sourceTab.briefingViewModel {
                 let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
-                let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
+                let openAIClient = OpenAIAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.openAIAPIKey) })
                 let briefingVM = BriefingViewModel(
                     query: sourceBriefingVM.document.query,
                     exaClient: exaClient,
-                    claudeClient: claudeClient
+                    openAIClient: openAIClient
                 )
                 briefingVM.document = sourceBriefingVM.document
                 briefingVM.phase = sourceBriefingVM.phase
@@ -1197,8 +1197,8 @@ final class BrowserViewModel {
 
     private func openBriefing(query: String) {
         let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
-        let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
-        let vm = BriefingViewModel(query: query, exaClient: exaClient, claudeClient: claudeClient)
+        let openAIClient = OpenAIAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.openAIAPIKey) })
+        let vm = BriefingViewModel(query: query, exaClient: exaClient, openAIClient: openAIClient)
 
         if let activeTab, canReuseAsNewTab(activeTab) {
             activeTab.kind = .briefing
@@ -1415,11 +1415,11 @@ final class BrowserViewModel {
             }
         } else if tab.kind == .briefing {
             let exaClient = ExaAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.exaAPIKey) })
-            let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
+            let openAIClient = OpenAIAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.openAIAPIKey) })
             let briefingVM = BriefingViewModel(
                 query: snapshot.briefing?.document.query ?? snapshot.title,
                 exaClient: exaClient,
-                claudeClient: claudeClient
+                openAIClient: openAIClient
             )
 
             if let briefingSnapshot = snapshot.briefing {
@@ -1871,8 +1871,8 @@ final class BrowserViewModel {
     }
 
     private func makeChatViewModel() -> ChatViewModel {
-        let claudeClient = ClaudeAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.claudeAPIKey) })
-        let vm = ChatViewModel(claudeClient: claudeClient)
+        let openAIClient = OpenAIAPIClient(getAPIKey: { [apiKeyStore] in apiKeyStore.read(.openAIAPIKey) })
+        let vm = ChatViewModel(openAIClient: openAIClient)
         vm.onConversationHistoryChange = { [weak self, weak vm] history in
             guard let self, let vm else { return }
             self.persistChatSnapshotIfNeeded(from: vm, history: history)

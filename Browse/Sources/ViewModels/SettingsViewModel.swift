@@ -4,10 +4,10 @@ import WebKit
 @Observable
 @MainActor
 final class SettingsViewModel {
-    var claudeAPIKey: String = ""
+    var openAIAPIKey: String = ""
     var exaAPIKey: String = ""
     var remoteGoogleSuggestionsEnabled: Bool = SearchAutocompleteSettings.remoteGoogleSuggestionsEnabled
-    var claudeTestStatus: TestStatus = .idle
+    var openAITestStatus: TestStatus = .idle
     var exaTestStatus: TestStatus = .idle
     var clearBrowsingDataStatus: ActionStatus = .idle
     var clearAIHistoryStatus: ActionStatus = .idle
@@ -34,12 +34,12 @@ final class SettingsViewModel {
     func loadAPIKeysIfNeeded() {
         guard !hasLoadedAPIKeys else { return }
         hasLoadedAPIKeys = true
-        claudeAPIKey = apiKeyStore.read(.claudeAPIKey) ?? ""
+        openAIAPIKey = apiKeyStore.read(.openAIAPIKey) ?? ""
         exaAPIKey = apiKeyStore.read(.exaAPIKey) ?? ""
     }
 
-    func setClaudeAPIKey(_ value: String) {
-        claudeAPIKey = value
+    func setOpenAIAPIKey(_ value: String) {
+        openAIAPIKey = value
     }
 
     func setExaAPIKey(_ value: String) {
@@ -90,14 +90,14 @@ final class SettingsViewModel {
     }
 
     @MainActor
-    func testClaudeConnection() async {
-        claudeTestStatus = .testing
-        let client = ClaudeAPIClient(getAPIKey: { [claudeAPIKey] in claudeAPIKey })
+    func testOpenAIConnection() async {
+        openAITestStatus = .testing
+        let client = OpenAIAPIClient(getAPIKey: { [openAIAPIKey] in openAIAPIKey })
         do {
             let success = try await client.testConnection()
-            claudeTestStatus = success ? .success : .failure("Unexpected response")
+            openAITestStatus = success ? .success : .failure("Unexpected response")
         } catch {
-            claudeTestStatus = .failure(error.localizedDescription)
+            openAITestStatus = .failure(error.localizedDescription)
         }
     }
 

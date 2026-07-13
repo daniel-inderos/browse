@@ -25,7 +25,7 @@ final class BriefingViewModel {
     }
 
     private let exaClient: ExaAPIClient
-    private let claudeClient: ClaudeAPIClient
+    private let openAIClient: OpenAIAPIClient
     private let composer = BriefingComposer()
 
     private var lastParseTime: Date = .distantPast
@@ -33,10 +33,10 @@ final class BriefingViewModel {
     @ObservationIgnored private var generationTask: Task<Void, Never>?
     @ObservationIgnored private var generationRunID = UUID()
 
-    init(query: String, exaClient: ExaAPIClient, claudeClient: ClaudeAPIClient) {
+    init(query: String, exaClient: ExaAPIClient, openAIClient: OpenAIAPIClient) {
         self.document = BriefingDocument(query: query)
         self.exaClient = exaClient
-        self.claudeClient = claudeClient
+        self.openAIClient = openAIClient
     }
 
     deinit {
@@ -103,18 +103,18 @@ final class BriefingViewModel {
         }
         onStateChange?()
 
-        // Phase 2: Stream from Claude
+        // Phase 2: Stream from OpenAI
         phase = .synthesizing
         document.streamedMarkdown = ""
 
         let systemPrompt = composer.buildSystemPrompt()
         let userMessage = composer.buildUserMessage(query: document.query, sources: exaResults.results)
 
-        briefingLogger.info("Starting Claude stream; sourceCount=\(exaResults.results.count, privacy: .public)")
+        briefingLogger.info("Starting OpenAI stream; sourceCount=\(exaResults.results.count, privacy: .public)")
 
-        let stream = claudeClient.streamMessage(
+        let stream = openAIClient.streamMessage(
             system: systemPrompt,
-            messages: [ClaudeMessage(role: "user", content: userMessage)],
+            messages: [OpenAIMessage(role: "user", content: userMessage)],
             outputSchema: BriefingComposer.briefingSchema
         )
 
@@ -128,37 +128,34 @@ final class BriefingViewModel {
                     receivedAnyText = true
                     parseIncrementally()
 
-                case .messageStop:
-                    briefingLogger.info("Claude stream completed; markdownLength=\(self.document.streamedMarkdown.count, privacy: .public)")
+                case .responseCompleted:
+                    briefingLogger.info("OpenAI stream completed; markdownLength=\(self.document.streamedMarkdown.count, privacy: .public)")
                     document.isStreaming = false
                     parseFinal()
                     phase = .complete
                     onStateChange?()
 
                 case .error(let msg):
-                    briefingLogger.error("Claude stream returned error event; messageLength=\(msg.count, privacy: .public)")
+                    briefingLogger.error("OpenAI stream returned error event; messageLength=\(msg.count, privacy: .public)")
                     phase = .error(msg)
                     document.isStreaming = false
                     onStateChange?()
-
-                default:
-                    break
                 }
             }
-            // Stream ended without messageStop
+            // Stream ended without response.completed.
             if document.isStreaming {
-                briefingLogger.warning("Claude stream ended without messageStop; receivedText=\(receivedAnyText, privacy: .public), markdownLength=\(self.document.streamedMarkdown.count, privacy: .public)")
+                briefingLogger.warning("OpenAI stream ended without response.completed; receivedText=\(receivedAnyText, privacy: .public), markdownLength=\(self.document.streamedMarkdown.count, privacy: .public)")
                 document.isStreaming = false
                 if receivedAnyText {
                     parseFinal()
                     phase = .complete
                 } else {
-                    phase = .error("Claude returned no content. The request may have been too large or the API key may be invalid.")
+                    phase = .error("OpenAI returned no content. The request may have been too large or the API key may be invalid.")
                 }
                 onStateChange?()
             }
         } catch {
-            briefingLogger.error("Claude stream failed; category=\(Self.errorCategory(error), privacy: .public)")
+            briefingLogger.error("OpenAI stream failed; category=\(Self.errorCategory(error), privacy: .public)")
             phase = .error(Self.userFacingErrorMessage(error, operation: "Stream"))
             document.isStreaming = false
             onStateChange?()
@@ -179,14 +176,14 @@ final class BriefingViewModel {
             originalBriefing: document.renderedMarkdown
         )
 
-        var messages: [ClaudeMessage] = []
+        var messages: [OpenAIMessage] = []
         for msg in conversationHistory {
-            messages.append(ClaudeMessage(role: msg.role.rawValue, content: msg.content))
+            messages.append(OpenAIMessage(role: msg.role.rawValue, content: msg.content))
         }
 
         var followUpResponse = ""
         streamingFollowUp = ""
-        let stream = claudeClient.streamMessage(system: systemPrompt, messages: messages)
+        let stream = openAIClient.streamMessage(system: systemPrompt, messages: messages)
 
         do {
             for try await event in stream {
@@ -195,7 +192,7 @@ final class BriefingViewModel {
                     followUpResponse += text
                     streamingFollowUp = followUpResponse
 
-                case .messageStop:
+                case .responseCompleted:
                     streamingFollowUp = ""
                     conversationHistory.append(ConversationMessage(role: .assistant, content: followUpResponse))
                     document.isStreaming = false
@@ -207,9 +204,6 @@ final class BriefingViewModel {
                     phase = .error(msg)
                     document.isStreaming = false
                     onStateChange?()
-
-                default:
-                    break
                 }
             }
             if document.isStreaming {
@@ -223,7 +217,7 @@ final class BriefingViewModel {
             }
         } catch {
             streamingFollowUp = ""
-            briefingLogger.error("Claude follow-up failed; category=\(Self.errorCategory(error), privacy: .public)")
+            briefingLogger.error("OpenAI follow-up failed; category=\(Self.errorCategory(error), privacy: .public)")
             phase = .error(Self.userFacingErrorMessage(error, operation: "Follow-up"))
             document.isStreaming = false
             onStateChange?()
@@ -269,13 +263,13 @@ final class BriefingViewModel {
 
     private static func errorCategory(_ error: Error) -> String {
         switch error {
-        case ClaudeAPIError.noAPIKey, ExaAPIError.noAPIKey:
+        case OpenAIAPIError.noAPIKey, ExaAPIError.noAPIKey:
             return "missing-api-key"
-        case ClaudeAPIError.httpError(let statusCode, _), ExaAPIError.httpError(let statusCode, _):
+        case OpenAIAPIError.httpError(let statusCode, _), ExaAPIError.httpError(let statusCode, _):
             return "http-\(statusCode)"
-        case ClaudeAPIError.decodingError, ExaAPIError.decodingError:
+        case OpenAIAPIError.decodingError, ExaAPIError.decodingError:
             return "decoding"
-        case ClaudeAPIError.networkError, ExaAPIError.networkError:
+        case OpenAIAPIError.networkError, ExaAPIError.networkError:
             return "network"
         case is CancellationError:
             return "cancelled"
@@ -286,13 +280,13 @@ final class BriefingViewModel {
 
     private static func userFacingErrorMessage(_ error: Error, operation: String) -> String {
         switch error {
-        case ClaudeAPIError.noAPIKey, ExaAPIError.noAPIKey:
+        case OpenAIAPIError.noAPIKey, ExaAPIError.noAPIKey:
             return "\(operation) failed: API key not configured. Add it to .env."
-        case ClaudeAPIError.httpError(let statusCode, _), ExaAPIError.httpError(let statusCode, _):
+        case OpenAIAPIError.httpError(let statusCode, _), ExaAPIError.httpError(let statusCode, _):
             return "\(operation) failed: provider returned HTTP \(statusCode)."
-        case ClaudeAPIError.decodingError, ExaAPIError.decodingError:
+        case OpenAIAPIError.decodingError, ExaAPIError.decodingError:
             return "\(operation) failed: provider response could not be decoded."
-        case ClaudeAPIError.networkError, ExaAPIError.networkError:
+        case OpenAIAPIError.networkError, ExaAPIError.networkError:
             return "\(operation) failed: network error."
         case is CancellationError:
             return "\(operation) cancelled."

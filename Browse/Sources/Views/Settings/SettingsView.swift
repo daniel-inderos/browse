@@ -65,10 +65,10 @@ struct SettingsView: View {
                 ))
             }
 
-            // ── Claude API ─────────────────────────────────────
+            // ── OpenAI API ─────────────────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Claude API")
+                    Text("OpenAI API")
                         .font(.system(size: 13, weight: .semibold))
                     Text("Powers briefing synthesis and follow-up conversations. Loaded from \(viewModel.apiKeyConfigurationSource).")
                         .font(.system(size: 11))
@@ -77,19 +77,19 @@ struct SettingsView: View {
                 }
 
                 SecureField("API Key", text: Binding(
-                    get: { viewModel.claudeAPIKey },
-                    set: { viewModel.setClaudeAPIKey($0) }
+                    get: { viewModel.openAIAPIKey },
+                    set: { viewModel.setOpenAIAPIKey($0) }
                 ))
                     .textFieldStyle(.roundedBorder)
                     .disabled(true)
 
                 HStack(spacing: 8) {
                     Button("Test Connection") {
-                        Task { await viewModel.testClaudeConnection() }
+                        Task { await viewModel.testOpenAIConnection() }
                     }
-                    .disabled(viewModel.claudeAPIKey.isEmpty)
+                    .disabled(viewModel.openAIAPIKey.isEmpty)
 
-                    statusIndicator(viewModel.claudeTestStatus)
+                    statusIndicator(viewModel.openAITestStatus)
                 }
             }
 
@@ -210,7 +210,7 @@ struct SettingsView: View {
             // ── Links ──────────────────────────────────────────
             Section {
                 VStack(alignment: .leading, spacing: 6) {
-                    linkRow(label: "Get Claude API key", url: "https://console.anthropic.com")
+                    linkRow(label: "Get OpenAI API key", url: "https://platform.openai.com/api-keys")
                     linkRow(label: "Get Exa API key", url: "https://dashboard.exa.ai")
                 }
             }

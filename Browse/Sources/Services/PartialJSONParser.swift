@@ -2,7 +2,7 @@ import Foundation
 
 /// Best-effort parser for JSON that may be truncated mid-stream.
 ///
-/// Claude's structured outputs guarantee the *final* response is valid JSON,
+/// OpenAI's structured outputs guarantee the *final* response is valid JSON,
 /// but while streaming we only ever hold a prefix of it. This parser accepts
 /// such prefixes and returns everything that is unambiguously present:
 /// unterminated strings yield their partial content, incomplete trailing

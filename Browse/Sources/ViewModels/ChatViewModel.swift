@@ -16,7 +16,7 @@ final class ChatViewModel {
     private(set) var pageTitle: String = ""
     private(set) var pageContent: String?
 
-    private let claudeClient: ClaudeAPIClient
+    private let openAIClient: OpenAIAPIClient
 
     var isStreamingAnswer: Bool {
         isStreaming && !conversationHistory.isEmpty && conversationHistory.last?.role == .user
@@ -33,8 +33,8 @@ final class ChatViewModel {
         return pageURL?.displayHost
     }
 
-    init(claudeClient: ClaudeAPIClient) {
-        self.claudeClient = claudeClient
+    init(openAIClient: OpenAIAPIClient) {
+        self.openAIClient = openAIClient
     }
 
     // MARK: - Page Context
@@ -114,11 +114,11 @@ final class ChatViewModel {
 
         let systemPrompt = buildSystemPrompt()
         let messages = conversationHistory.map {
-            ClaudeMessage(role: $0.role.rawValue, content: $0.content)
+            OpenAIMessage(role: $0.role.rawValue, content: $0.content)
         }
 
         var responseText = ""
-        let stream = claudeClient.streamMessage(system: systemPrompt, messages: messages)
+        let stream = openAIClient.streamMessage(system: systemPrompt, messages: messages)
 
         do {
             for try await event in stream {
@@ -127,7 +127,7 @@ final class ChatViewModel {
                     responseText += text
                     streamingResponse = responseText
 
-                case .messageStop:
+                case .responseCompleted:
                     streamingResponse = ""
                     conversationHistory.append(
                         ConversationMessage(role: .assistant, content: responseText)
@@ -139,12 +139,9 @@ final class ChatViewModel {
                     streamingResponse = ""
                     errorMessage = msg
                     isStreaming = false
-
-                default:
-                    break
                 }
             }
-            // Stream ended without messageStop
+            // Stream ended without response.completed.
             if isStreaming {
                 if !responseText.isEmpty {
                     conversationHistory.append(
