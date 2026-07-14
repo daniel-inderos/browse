@@ -243,10 +243,6 @@ final class BrowserViewModel {
         }
         clearSidebarSelection()
 
-        // Favorites are shared across workspaces: carry the live tabs over
-        // instead of tearing them down and re-materializing.
-        let preservedFavoriteTabs = tabs.filter(\.isFavorite)
-
         if savingCurrentWorkspaceState {
             saveCurrentWorkspaceState()
         }
@@ -260,13 +256,11 @@ final class BrowserViewModel {
         if let state = persistenceStore.loadWorkspaceState(forWorkspaceID: id),
            applyPersistedState(
                state.withRegeneratedTabIdentity(),
-               preservedFavoriteTabs: preservedFavoriteTabs,
                restoresTabBarWidth: false
            ) {
             persistState()
         } else {
             resetInMemoryBrowsingState(resetsTabBarWidth: false)
-            tabs = preservedFavoriteTabs
             newTab()
         }
     }
@@ -379,9 +373,6 @@ final class BrowserViewModel {
         if !restoresPersistedState {
             newTab()
         } else if !restorePersistedState() {
-            // Even without a restorable window/workspace state, the shared
-            // favorites still belong in the sidebar.
-            tabs = materializeGlobalFavorites()
             newTab()
         }
     }
@@ -1338,7 +1329,6 @@ final class BrowserViewModel {
 
     private func applyPersistedState(
         _ persisted: PersistedBrowserState,
-        preservedFavoriteTabs: [Tab]? = nil,
         restoresTabBarWidth: Bool = true
     ) -> Bool {
         guard !persisted.tabs.isEmpty else { return false }
@@ -1369,21 +1359,7 @@ final class BrowserViewModel {
         }
         let validGroupIDs = Set(tabGroups.map(\.id))
 
-        // Favorites are global (shared across workspaces): reuse the live
-        // favorite tabs across a workspace switch, or materialize them from
-        // the global store on first restore. Favorites still embedded in old
-        // snapshots (pre-migration data) are merged in, deduplicated by URL.
-        let favoriteSnapshots = persisted.tabs.filter { $0.isFavorite == true }
-        let standardSnapshots = persisted.tabs.filter { $0.isFavorite != true }
-        var favoriteTabs = preservedFavoriteTabs ?? materializeGlobalFavorites()
-        var favoriteKeys = Set(favoriteTabs.map(favoriteDedupeKey(for:)))
-        for snapshot in favoriteSnapshots {
-            guard !favoriteKeys.contains(snapshot.favoriteDedupeKey) else { continue }
-            favoriteKeys.insert(snapshot.favoriteDedupeKey)
-            favoriteTabs.append(makeRestoredTab(from: snapshot, validGroupIDs: []))
-        }
-
-        tabs = favoriteTabs + standardSnapshots.map { snapshot in
+        tabs = persisted.tabs.map { snapshot in
             makeRestoredTab(from: snapshot, validGroupIDs: validGroupIDs)
         }
 
@@ -1422,16 +1398,13 @@ final class BrowserViewModel {
     }
 
     /// Builds a live Tab (including its web/briefing view model) from a
-    /// persisted snapshot. When `regeneratesID` is set the tab gets a fresh
-    /// identity, which global favorites need so multiple windows never share
-    /// tab IDs.
+    /// persisted snapshot.
     private func makeRestoredTab(
         from snapshot: PersistedTabSnapshot,
-        validGroupIDs: Set<UUID>,
-        regeneratesID: Bool = false
+        validGroupIDs: Set<UUID>
     ) -> Tab {
         let tab = Tab(
-            id: regeneratesID ? UUID() : snapshot.id,
+            id: snapshot.id,
             kind: snapshot.kind,
             title: snapshot.title,
             url: snapshot.url,
@@ -1484,36 +1457,9 @@ final class BrowserViewModel {
         return tab
     }
 
-    // MARK: - Global Favorites
-
-    /// Materializes the shared (cross-workspace) favorites from the store.
-    private func materializeGlobalFavorites() -> [Tab] {
-        guard allowsStatePersistence else { return [] }
-        return persistenceStore.loadGlobalFavorites().map { snapshot in
-            makeRestoredTab(from: snapshot, validGroupIDs: [], regeneratesID: true)
-        }
-    }
-
-    private func favoriteDedupeKey(for tab: Tab) -> String {
-        (tab.webTabViewModel?.currentURL ?? tab.url)?.absoluteString
-            ?? "\(tab.kind.rawValue):\(tab.title)"
-    }
-
-    private func makeGlobalFavoriteSnapshots() -> [PersistedTabSnapshot] {
-        tabs.filter(\.isFavorite).map(makePersistedTabSnapshot)
-    }
-
-    private func persistGlobalFavorites() {
-        guard allowsStatePersistence else { return }
-        persistenceStore.saveGlobalFavorites(makeGlobalFavoriteSnapshots())
-    }
-
     private func makePersistedState() -> PersistedBrowserState {
-        // Favorites are shared across all workspaces and persisted separately
-        // in the global favorites store, never inside workspace snapshots.
-        let tabSnapshots = tabs.filter { !$0.isFavorite }.map(makePersistedTabSnapshot)
         return PersistedBrowserState(
-            tabs: tabSnapshots,
+            tabs: tabs.map(makePersistedTabSnapshot),
             tabGroups: tabGroups.map { group in
                 PersistedTabGroupSnapshot(
                     id: group.id,
@@ -1563,13 +1509,11 @@ final class BrowserViewModel {
             workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
         }
         persistenceStore.save(state, forWindowID: windowID, workspaceID: activeWorkspaceID)
-        persistGlobalFavorites()
         refreshWorkspaces()
     }
 
     private func saveCurrentWorkspaceState() {
         guard allowsStatePersistence else { return }
-        persistGlobalFavorites()
         let state = makePersistedState()
         if state.isRestorableWindowState {
             workspaceIDsOwnedByThisWindow.insert(activeWorkspaceID)
@@ -1582,9 +1526,7 @@ final class BrowserViewModel {
     }
 
     private func discardLiveTabsForWorkspaceSwitch() {
-        // Favorites are shared across workspaces and stay alive across a
-        // switch, so only workspace-local tabs are torn down.
-        tabs.filter { !$0.isFavorite }.forEach { tab in
+        tabs.forEach { tab in
             cancelLiveBriefingWork(for: tab)
             discardLiveWebView(for: tab)
         }

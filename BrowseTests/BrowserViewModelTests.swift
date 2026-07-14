@@ -684,8 +684,8 @@ struct BrowserViewModelTests {
         #expect(store.workspaceID(forWindowID: windowID) == nil)
     }
 
-    @Test("Favorites are shared across workspaces")
-    func favoritesAreSharedAcrossWorkspaces() throws {
+    @Test("Favorites are isolated per workspace")
+    func favoritesAreIsolatedPerWorkspace() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer {
@@ -703,33 +703,32 @@ struct BrowserViewModelTests {
         regular.url = URL(string: "https://example.com/default")
 
         viewModel.newTab()
-        let favorite = try #require(viewModel.activeTab)
-        favorite.title = "Docs"
-        favorite.url = URL(string: "https://example.com/docs")
-        viewModel.toggleFavorite(favorite.id)
+        let defaultFavorite = try #require(viewModel.activeTab)
+        defaultFavorite.title = "Docs"
+        defaultFavorite.url = URL(string: "https://example.com/docs")
+        viewModel.toggleFavorite(defaultFavorite.id)
 
         viewModel.createWorkspace(named: "Second")
         let secondWorkspaceID = viewModel.activeWorkspaceID
 
-        // The favorite carries over live, with the same identity, and is not
-        // part of the new workspace's own tabs.
-        #expect(viewModel.tabs.filter(\.isFavorite).map(\.id) == [favorite.id])
-        #expect(viewModel.tabs.contains { !$0.isFavorite })
+        #expect(viewModel.tabs.filter(\.isFavorite).isEmpty)
+        let secondFavorite = try #require(viewModel.activeTab)
+        secondFavorite.title = "Second Docs"
+        secondFavorite.url = URL(string: "https://example.com/second-docs")
+        viewModel.toggleFavorite(secondFavorite.id)
 
-        // Switching back must not duplicate the favorite.
         viewModel.switchWorkspace(to: defaultWorkspaceID)
-        #expect(viewModel.tabs.filter(\.isFavorite).map(\.id) == [favorite.id])
+        #expect(viewModel.tabs.filter(\.isFavorite).map(\.url) == [URL(string: "https://example.com/docs")])
         #expect(viewModel.tabs.contains { $0.url == URL(string: "https://example.com/default") })
 
-        // Unfavoriting removes it from every workspace and the global store.
-        viewModel.toggleFavorite(favorite.id)
+        let restoredDefaultFavorite = try #require(viewModel.tabs.first { $0.isFavorite })
+        viewModel.toggleFavorite(restoredDefaultFavorite.id)
         viewModel.switchWorkspace(to: secondWorkspaceID)
-        #expect(viewModel.tabs.filter(\.isFavorite).isEmpty)
-        #expect(store.loadGlobalFavorites().isEmpty)
+        #expect(viewModel.tabs.filter(\.isFavorite).map(\.url) == [URL(string: "https://example.com/second-docs")])
     }
 
-    @Test("Global favorites are restored for new browser instances")
-    func globalFavoritesRestoredForNewInstances() throws {
+    @Test("Browser instances restore favorites from the active workspace")
+    func browserInstancesRestoreActiveWorkspaceFavorites() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer {
@@ -741,21 +740,29 @@ struct BrowserViewModelTests {
             restoresPersistedState: false,
             persistenceStore: store
         )
-        let favorite = try #require(first.activeTab)
-        favorite.title = "Docs"
-        favorite.url = URL(string: "https://example.com/docs")
-        first.toggleFavorite(favorite.id)
+        let defaultWorkspaceID = first.activeWorkspaceID
+        let defaultFavorite = try #require(first.activeTab)
+        defaultFavorite.title = "Docs"
+        defaultFavorite.url = URL(string: "https://example.com/docs")
+        first.toggleFavorite(defaultFavorite.id)
+
+        first.createWorkspace(named: "Second")
+        let secondFavorite = try #require(first.activeTab)
+        secondFavorite.title = "Second Docs"
+        secondFavorite.url = URL(string: "https://example.com/second-docs")
+        first.toggleFavorite(secondFavorite.id)
 
         let second = BrowserViewModel(windowID: UUID(), persistenceStore: store)
         let restoredFavorites = second.tabs.filter(\.isFavorite)
         #expect(restoredFavorites.count == 1)
-        #expect(restoredFavorites.first?.url == URL(string: "https://example.com/docs"))
-        // Each window materializes favorites under a fresh tab identity.
-        #expect(restoredFavorites.first?.id != favorite.id)
+        #expect(restoredFavorites.first?.url == URL(string: "https://example.com/second-docs"))
+
+        second.switchWorkspace(to: defaultWorkspaceID)
+        #expect(second.tabs.filter(\.isFavorite).map(\.url) == [URL(string: "https://example.com/docs")])
     }
 
-    @Test("Legacy per-workspace favorites merge into the global set")
-    func legacyFavoritesMergeIntoGlobalSet() throws {
+    @Test("Persisted favorites remain in their workspace state")
+    func persistedFavoritesRemainInWorkspaceState() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer {
@@ -814,9 +821,11 @@ struct BrowserViewModelTests {
         #expect(favorites.first?.url == favoriteURL)
         #expect(viewModel.activeTabID == regularTabID)
 
-        // The merged favorite lands in the global store on the next persist.
         viewModel.newTab()
-        #expect(store.loadGlobalFavorites().map(\.url) == [favoriteURL])
+        let workspaceState = try #require(
+            store.loadWorkspaceState(forWorkspaceID: BrowserPersistenceStore.defaultWorkspaceID)
+        )
+        #expect(workspaceState.tabs.filter { $0.isFavorite == true }.map(\.url) == [favoriteURL])
     }
 
     @Test("Closing a favorite unloads it instead of removing it")

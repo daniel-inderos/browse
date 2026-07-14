@@ -134,8 +134,8 @@ struct PersistedWorkspace: Codable, Identifiable, Equatable {
 struct BrowserPersistenceStore {
     private static let legacyJSONMigrationKey = "legacy-json-migrated"
     private static let lastOpenedWorkspaceIDKey = "last-opened-workspace-id"
-    private static let globalFavoritesKey = "global-favorites"
-    private static let globalFavoritesMigrationKey = "global-favorites-migrated"
+    private static let legacyGlobalFavoritesKey = "global-favorites"
+    private static let workspaceFavoritesMigrationKey = "workspace-favorites-migrated"
     private static let legacyStateWindowID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     static let defaultWorkspaceID = UUID(uuidString: "00000000-0000-0000-0000-000000000010")!
 
@@ -489,69 +489,47 @@ struct BrowserPersistenceStore {
         save(state, forWindowID: Self.legacyStateWindowID)
     }
 
-    // MARK: - Global Favorites
+    // MARK: - Favorites migration
 
-    /// Favorites are shared across all workspaces (Arc-style), so they are
-    /// stored once, globally, instead of inside each workspace snapshot.
-    func loadGlobalFavorites() -> [PersistedTabSnapshot] {
-        do {
-            return try withDatabase { database in
-                try loadGlobalFavorites(in: database)
-            }
-        } catch {
-            persistenceLogger.error("Failed to load global favorites; category=\(Self.errorCategory(error), privacy: .public)")
-            return []
-        }
-    }
-
-    func saveGlobalFavorites(_ favorites: [PersistedTabSnapshot]) {
-        do {
-            try withDatabase { database in
-                try setMetadataValue(
-                    try encodeJSON(favorites),
-                    forKey: Self.globalFavoritesKey,
-                    in: database
-                )
-            }
-        } catch {
-            persistenceLogger.error("Failed to save global favorites; category=\(Self.errorCategory(error), privacy: .public)")
-        }
-    }
-
-    private func loadGlobalFavorites(in database: SQLiteDatabase) throws -> [PersistedTabSnapshot] {
-        guard let json = try metadataValue(forKey: Self.globalFavoritesKey, in: database) else {
+    private func loadLegacyGlobalFavorites(in database: SQLiteDatabase) throws -> [PersistedTabSnapshot] {
+        guard let json = try metadataValue(forKey: Self.legacyGlobalFavoritesKey, in: database) else {
             return []
         }
         return try decodeJSON([PersistedTabSnapshot].self, from: json)
     }
 
-    /// One-time migration: favorites used to live inside each window and
-    /// workspace snapshot. Merge them into the shared global set
-    /// (deduplicated by URL) and strip them from the per-workspace snapshots.
-    private func migrateGlobalFavoritesIfNeeded(in database: SQLiteDatabase) throws {
-        guard try metadataValue(forKey: Self.globalFavoritesMigrationKey, in: database) != "1" else { return }
+    /// Favorites were briefly stored in one global metadata record. Seed each
+    /// existing workspace and window with its own copy so upgrades retain the
+    /// user's favorites while all future writes remain workspace-local.
+    private func migrateFavoritesToWorkspacesIfNeeded(in database: SQLiteDatabase) throws {
+        guard try metadataValue(forKey: Self.workspaceFavoritesMigrationKey, in: database) != "1" else { return }
 
-        var favorites = try loadGlobalFavorites(in: database)
-        var seenKeys = Set(favorites.map(\.favoriteDedupeKey))
-        func adopt(_ candidates: [PersistedTabSnapshot]) {
-            for candidate in candidates where !seenKeys.contains(candidate.favoriteDedupeKey) {
-                seenKeys.insert(candidate.favoriteDedupeKey)
-                favorites.append(candidate)
+        let favorites = try loadLegacyGlobalFavorites(in: database)
+        guard !favorites.isEmpty else {
+            try database.transaction {
+                try database.prepare("DELETE FROM metadata WHERE key = ?") { statement in
+                    try bindText(Self.legacyGlobalFavoritesKey, to: statement, at: 1, database: database)
+                    try stepDone(statement, database: database)
+                }
+                try setMetadataValue("1", forKey: Self.workspaceFavoritesMigrationKey, in: database)
             }
+            return
         }
-
         let windowSnapshots = try loadWindowSnapshots(in: database)
         let workspaceStates = try loadWorkspaceStateSnapshots(in: database)
+        let workspaceStateByID = Dictionary(uniqueKeysWithValues: workspaceStates.map { ($0.workspaceID, $0) })
+        let workspaces = try loadWorkspaceRows(in: database)
 
         try database.transaction {
             for snapshot in windowSnapshots {
-                let (state, extracted) = snapshot.state.removingFavoriteTabs()
-                guard !extracted.isEmpty else { continue }
-                adopt(extracted)
+                let state = snapshot.state.addingMigratedFavorites(favorites)
+                let workspaceID = try loadWorkspaceID(forWindowID: snapshot.id, in: database)
+                    ?? Self.defaultWorkspaceID
                 if state.isRestorableWindowState {
                     try saveWindowState(
                         state,
                         forWindowID: snapshot.id,
+                        workspaceID: workspaceID,
                         lastUpdatedAt: snapshot.lastUpdatedAt,
                         in: database,
                         beginsTransaction: false
@@ -560,30 +538,37 @@ struct BrowserPersistenceStore {
                     try deleteWindowState(forWindowID: snapshot.id, in: database)
                 }
             }
-            for workspaceState in workspaceStates {
-                let (state, extracted) = workspaceState.state.removingFavoriteTabs()
-                guard !extracted.isEmpty else { continue }
-                adopt(extracted)
+
+            for workspace in workspaces {
+                let workspaceState = workspaceStateByID[workspace.id]
+                let baseState = workspaceState?.state ?? PersistedBrowserState(
+                    tabs: [],
+                    activeTabID: nil,
+                    isTabBarVisible: true,
+                    tabBarWidth: 220,
+                    chatPaneWidth: nil,
+                    chatPaneHeight: nil,
+                    chatPaneOffsetX: nil,
+                    chatPaneOffsetY: nil,
+                    pageChats: nil
+                )
+                let state = baseState.addingMigratedFavorites(favorites)
                 if state.isRestorableWindowState {
                     try saveWorkspaceState(
                         state,
-                        forWorkspaceID: workspaceState.workspaceID,
-                        updatedAt: workspaceState.updatedAt,
+                        forWorkspaceID: workspace.id,
+                        updatedAt: workspaceState?.updatedAt ?? workspace.updatedAt,
                         in: database,
                         beginsTransaction: false
                     )
-                } else {
-                    try deleteWorkspaceState(forWorkspaceID: workspaceState.workspaceID, in: database)
                 }
             }
-            if !favorites.isEmpty {
-                try setMetadataValue(
-                    try encodeJSON(favorites),
-                    forKey: Self.globalFavoritesKey,
-                    in: database
-                )
+
+            try database.prepare("DELETE FROM metadata WHERE key = ?") { statement in
+                try bindText(Self.legacyGlobalFavoritesKey, to: statement, at: 1, database: database)
+                try stepDone(statement, database: database)
             }
-            try setMetadataValue("1", forKey: Self.globalFavoritesMigrationKey, in: database)
+            try setMetadataValue("1", forKey: Self.workspaceFavoritesMigrationKey, in: database)
         }
     }
 
@@ -711,7 +696,7 @@ struct BrowserPersistenceStore {
         try createSchema(in: database)
         try migrateSchema(in: database)
         try migrateLegacyJSONIfNeeded(in: database, legacyStateWindowID: legacyStateWindowID)
-        try migrateGlobalFavoritesIfNeeded(in: database)
+        try migrateFavoritesToWorkspacesIfNeeded(in: database)
         return try body(database)
     }
 
@@ -2025,20 +2010,33 @@ extension PersistedBrowserState {
         }
     }
 
-    /// Splits out favorite tabs, returning the state without them plus the
-    /// extracted favorite snapshots. Used to migrate legacy per-workspace
-    /// favorites into the shared global set.
-    func removingFavoriteTabs() -> (state: PersistedBrowserState, favorites: [PersistedTabSnapshot]) {
-        let favorites = tabs.filter { $0.isFavorite == true }
-        guard !favorites.isEmpty else { return (self, []) }
+    func addingMigratedFavorites(_ favorites: [PersistedTabSnapshot]) -> PersistedBrowserState {
+        var seenKeys = Set(tabs.filter { $0.isFavorite == true }.map(\.favoriteDedupeKey))
+        let migratedFavorites = favorites.compactMap { favorite -> PersistedTabSnapshot? in
+            guard seenKeys.insert(favorite.favoriteDedupeKey).inserted else { return nil }
+            return PersistedTabSnapshot(
+                id: UUID(),
+                kind: favorite.kind,
+                title: favorite.title,
+                url: favorite.url,
+                groupID: nil,
+                navigationHistory: favorite.navigationHistory,
+                navigationHistoryIndex: favorite.navigationHistoryIndex,
+                pageZoom: favorite.pageZoom,
+                isFavorite: true,
+                isPinned: favorite.isPinned,
+                createdAt: favorite.createdAt,
+                lastAccessedAt: favorite.lastAccessedAt,
+                briefing: favorite.briefing
+            )
+        }
+        guard !migratedFavorites.isEmpty else { return self }
 
-        let remainingTabs = tabs.filter { $0.isFavorite != true }
-        let state = PersistedBrowserState(
-            tabs: remainingTabs,
+        let migratedTabs = migratedFavorites + tabs
+        return PersistedBrowserState(
+            tabs: migratedTabs,
             tabGroups: tabGroups,
-            activeTabID: activeTabID.flatMap { id in
-                remainingTabs.contains { $0.id == id } ? id : remainingTabs.first?.id
-            },
+            activeTabID: activeTabID ?? migratedTabs.first?.id,
             isTabBarVisible: isTabBarVisible,
             tabBarWidth: tabBarWidth,
             chatPaneWidth: chatPaneWidth,
@@ -2047,7 +2045,6 @@ extension PersistedBrowserState {
             chatPaneOffsetY: chatPaneOffsetY,
             pageChats: pageChats
         )
-        return (state, favorites)
     }
 
     /// Returns a copy with freshly generated tab and tab-group identifiers.
@@ -2160,9 +2157,8 @@ private extension PersistedBrowserState {
     }
 }
 
-extension PersistedTabSnapshot {
-    /// Key used to deduplicate favorites when merging per-workspace favorites
-    /// into the shared global set.
+private extension PersistedTabSnapshot {
+    /// Key used to avoid duplicate tabs when migrating legacy global favorites.
     var favoriteDedupeKey: String {
         url?.absoluteString ?? "\(kind.rawValue):\(title)"
     }
