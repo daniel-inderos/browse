@@ -625,6 +625,34 @@ struct BrowserViewModelTests {
         #expect(viewModel.workspaces.contains { $0.id == firstWorkspaceID })
     }
 
+    @Test("Control-number selection switches to the matching workspace")
+    func controlNumberSelectionSwitchesToMatchingWorkspace() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let viewModel = BrowserViewModel(
+            restoresPersistedState: false,
+            persistenceStore: BrowserPersistenceStore(directoryURL: directory)
+        )
+        viewModel.createWorkspace(named: "Research")
+        viewModel.createWorkspace(named: "Personal")
+        let workspaceIDs = viewModel.workspaces.map(\.id)
+
+        viewModel.selectWorkspaceByIndex(0)
+        #expect(viewModel.activeWorkspaceID == workspaceIDs[0])
+        #expect(viewModel.workspaceSwitchDirection == -1)
+
+        viewModel.selectWorkspaceByIndex(2)
+        #expect(viewModel.activeWorkspaceID == workspaceIDs[2])
+        #expect(viewModel.workspaceSwitchDirection == 1)
+
+        viewModel.selectWorkspaceByIndex(8)
+        #expect(viewModel.activeWorkspaceID == workspaceIDs[2])
+    }
+
     @Test("Reopening app restores the last active workspace")
     func reopeningAppRestoresLastActiveWorkspace() throws {
         let directory = FileManager.default.temporaryDirectory

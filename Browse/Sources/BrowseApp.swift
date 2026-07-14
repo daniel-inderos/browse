@@ -238,6 +238,22 @@ private struct BrowserCommands: Commands {
 
             Divider()
 
+            ForEach(0..<9, id: \.self) { index in
+                Button("Select Workspace \(index + 1)") {
+                    browserViewModel?.selectWorkspaceByIndex(index)
+                }
+                .keyboardShortcut(
+                    KeyEquivalent(Character(String(index + 1))),
+                    modifiers: .control
+                )
+                .disabled(
+                    browserViewModel?.isPrivateBrowsing != false
+                        || index >= (browserViewModel?.workspaces.count ?? 0)
+                )
+            }
+
+            Divider()
+
             Button("Previous Workspace") {
                 browserViewModel?.selectPreviousWorkspace()
             }

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct TabBarView: View {
     @Environment(BrowserViewModel.self) private var browserVM
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // MARK: - Drag-to-Reorder State
 
@@ -30,7 +31,16 @@ struct TabBarView: View {
         removal: .move(edge: .leading).combined(with: .opacity)
     )
     private let tabListAnimation = Animation.spring(response: 0.26, dampingFraction: 0.86)
-    private let workspaceSwitchAnimation = Animation.spring(response: 0.22, dampingFraction: 0.9)
+
+    private var workspaceSwitchAnimation: Animation {
+        reduceMotion
+            ? .easeOut(duration: 0.12)
+            : .smooth(duration: 0.28, extraBounce: 0)
+    }
+
+    private var workspaceSlideDistance: CGFloat {
+        reduceMotion ? 0 : 36
+    }
 
     // MARK: - Sectioned Tab Lists
 
@@ -144,7 +154,7 @@ struct TabBarView: View {
             }
             .id(browserVM.activeWorkspaceID)
             .transition(workspaceSlideTransition)
-            .offset(x: workspaceSwipeProgress * 36)
+            .offset(x: workspaceSwipeProgress * workspaceSlideDistance)
             .opacity(1 - Double(abs(workspaceSwipeProgress)) * 0.08)
 
             Spacer(minLength: 0)
@@ -214,8 +224,10 @@ struct TabBarView: View {
     private var workspaceSlideTransition: AnyTransition {
         let isForward = browserVM.workspaceSwitchDirection >= 0
         return .asymmetric(
-            insertion: .offset(x: isForward ? 36 : -36).combined(with: .opacity),
-            removal: .offset(x: isForward ? -36 : 36).combined(with: .opacity)
+            insertion: .offset(x: isForward ? workspaceSlideDistance : -workspaceSlideDistance)
+                .combined(with: .opacity),
+            removal: .offset(x: isForward ? -workspaceSlideDistance : workspaceSlideDistance)
+                .combined(with: .opacity)
         )
     }
 

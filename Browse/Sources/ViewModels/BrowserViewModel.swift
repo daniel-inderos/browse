@@ -226,6 +226,11 @@ final class BrowserViewModel {
         switchWorkspace(offset: -1)
     }
 
+    func selectWorkspaceByIndex(_ index: Int) {
+        guard workspaces.indices.contains(index) else { return }
+        switchWorkspace(to: workspaces[index].id)
+    }
+
     private func switchWorkspace(
         to id: UUID,
         savingCurrentWorkspaceState: Bool,
