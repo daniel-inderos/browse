@@ -233,6 +233,19 @@ final class WebTabViewModel: NSObject {
     static let maximumPageZoom = 3.0
     static let pageZoomStep = 0.1
 
+    static func navigationResponsePolicy(
+        canShowMIMEType: Bool,
+        contentDisposition: String?
+    ) -> WKNavigationResponsePolicy {
+        let dispositionType = contentDisposition?
+            .split(separator: ";", maxSplits: 1)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let isAttachment = dispositionType?.caseInsensitiveCompare("attachment") == .orderedSame
+
+        return isAttachment || !canShowMIMEType ? .download : .allow
+    }
+
     init(
         websiteDataStore: WKWebsiteDataStore = .default(),
         downloadManager: DownloadManager = .shared,
@@ -1178,7 +1191,12 @@ extension WebTabViewModel: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
-        navigationResponse.canShowMIMEType ? .allow : .download
+        let contentDisposition = (navigationResponse.response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")
+        return Self.navigationResponsePolicy(
+            canShowMIMEType: navigationResponse.canShowMIMEType,
+            contentDisposition: contentDisposition
+        )
     }
 
     func webView(
@@ -1201,6 +1219,17 @@ extension WebTabViewModel: WKNavigationDelegate {
         downloadManager.begin(
             download,
             sourceURL: navigationResponse.response.url,
+            workspaceID: downloadWorkspaceID
+        )
+    }
+
+    // WebKit routes downloads created by its macOS context menu through this
+    // selector instead of either public `didBecome` delegate callback.
+    @objc(_webView:contextMenuDidCreateDownload:)
+    func handleContextMenuDownload(_ webView: WKWebView, download: WKDownload) {
+        downloadManager.begin(
+            download,
+            sourceURL: download.originalRequest?.url,
             workspaceID: downloadWorkspaceID
         )
     }

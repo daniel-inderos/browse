@@ -316,50 +316,56 @@ struct TabBarView: View {
             }
             .buttonStyle(.plain)
 
-            Button(action: { browserVM.toggleDownloadsPanel() }) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(
-                            browserVM.isDownloadsPanelVisible
-                                ? BrowseColor.accent
-                                : Color.secondary
-                        )
-                        .frame(width: 34, height: 32)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color.primary.opacity(0.04))
-                        )
-                        .contentShape(Rectangle())
+            if !browserVM.downloadManager.downloads.isEmpty {
+                Button(action: { browserVM.toggleDownloadsPanel() }) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(
+                                browserVM.isDownloadsPanelVisible
+                                    ? BrowseColor.accent
+                                    : Color.secondary
+                            )
+                            .frame(width: 34, height: 32)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(Color.primary.opacity(0.04))
+                            )
+                            .contentShape(Rectangle())
 
-                    if browserVM.downloadManager.activeCount > 0 {
-                        Circle()
-                            .fill(BrowseColor.accent)
-                            .frame(width: 7, height: 7)
-                            .offset(x: -7, y: 7)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .help("Downloads")
-            .popover(
-                isPresented: Binding(
-                    get: { browserVM.isDownloadsPanelVisible },
-                    set: { isPresented in
-                        if isPresented {
-                            browserVM.isDownloadsPanelVisible = true
-                        } else {
-                            browserVM.hideDownloadsPanel()
+                        if browserVM.downloadManager.activeCount > 0 {
+                            Circle()
+                                .fill(BrowseColor.accent)
+                                .frame(width: 7, height: 7)
+                                .offset(x: -7, y: 7)
                         }
                     }
-                ),
-                arrowEdge: .trailing
-            ) {
-                DownloadsPanelView(
-                    manager: browserVM.downloadManager,
-                    activeWorkspaceID: browserVM.activeWorkspaceID,
-                    workspaces: browserVM.workspaces,
-                    onClose: { browserVM.hideDownloadsPanel() }
+                }
+                .buttonStyle(.plain)
+                .help("Downloads")
+                .popover(
+                    isPresented: Binding(
+                        get: { browserVM.isDownloadsPanelVisible },
+                        set: { isPresented in
+                            if isPresented {
+                                browserVM.isDownloadsPanelVisible = true
+                            } else {
+                                browserVM.hideDownloadsPanel()
+                            }
+                        }
+                    ),
+                    arrowEdge: .trailing
+                ) {
+                    DownloadsPanelView(
+                        manager: browserVM.downloadManager,
+                        activeWorkspaceID: browserVM.activeWorkspaceID,
+                        workspaces: browserVM.workspaces,
+                        onClose: { browserVM.hideDownloadsPanel() }
+                    )
+                }
+                .transition(
+                    .scale(scale: 0.8, anchor: .trailing)
+                        .combined(with: .opacity)
                 )
             }
 
@@ -412,6 +418,12 @@ struct TabBarView: View {
             .buttonStyle(.plain)
             .help("New Folder")
         }
+        .animation(
+            reduceMotion
+                ? .easeOut(duration: 0.12)
+                : .smooth(duration: 0.24, extraBounce: 0),
+            value: browserVM.downloadManager.downloads.isEmpty
+        )
         .padding(.horizontal, 8)
         .padding(.bottom, 10)
     }

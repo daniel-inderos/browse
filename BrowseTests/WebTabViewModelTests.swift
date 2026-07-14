@@ -6,6 +6,107 @@ import WebKit
 @MainActor
 @Suite("WebTabViewModel find in page")
 struct WebTabViewModelTests {
+    @Test("WebKit native context-menu downloads are routed to DownloadManager")
+    func nativeContextMenuDownloadsAreRoutedToDownloadManager() {
+        let viewModel = WebTabViewModel(websiteDataStore: .nonPersistent())
+        defer { viewModel.closePage() }
+
+        #expect(
+            viewModel.responds(
+                to: NSSelectorFromString("_webView:contextMenuDidCreateDownload:")
+            )
+        )
+    }
+
+    @Test("A context-menu WKDownload selects a destination and completes on disk")
+    func nativeContextMenuDownloadCompletesOnDisk() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let downloadManager = DownloadManager(
+            downloadsDirectoryURL: directory,
+            historyStore: DownloadHistoryStore(
+                fileURL: directory.appendingPathComponent("history.json")
+            ),
+            loadsSavedDownloads: false
+        )
+        let viewModel = WebTabViewModel(
+            websiteDataStore: .nonPersistent(),
+            downloadManager: downloadManager
+        )
+        defer { viewModel.closePage() }
+
+        let expectedData = try #require("context menu image".data(using: .utf8))
+        let sourceURL = try #require(
+            URL(string: "data:application/octet-stream;base64,\(expectedData.base64EncodedString())")
+        )
+        let download = await viewModel.webView.startDownload(
+            using: URLRequest(url: sourceURL)
+        )
+
+        _ = viewModel.perform(
+            NSSelectorFromString("_webView:contextMenuDidCreateDownload:"),
+            with: viewModel.webView,
+            with: download
+        )
+
+        #expect(download.delegate === downloadManager)
+
+        let response = URLResponse(
+            url: sourceURL,
+            mimeType: "application/octet-stream",
+            expectedContentLength: expectedData.count,
+            textEncodingName: nil
+        )
+        var selectedDestination: URL?
+        downloadManager.download(
+            download,
+            decideDestinationUsing: response,
+            suggestedFilename: "image.bin"
+        ) { destinationURL in
+            selectedDestination = destinationURL
+        }
+
+        let destinationURL = try #require(selectedDestination)
+        try expectedData.write(to: destinationURL)
+        downloadManager.downloadDidFinish(download)
+        download.delegate = nil
+        _ = await download.cancel()
+
+        let item = try #require(downloadManager.downloads.first)
+        #expect(item.state == .completed)
+        #expect(item.destinationURL == destinationURL)
+        #expect(FileManager.default.fileExists(atPath: destinationURL.path))
+        #expect(try Data(contentsOf: destinationURL) == expectedData)
+    }
+
+    @Test("Attachment responses download even when WebKit can display them")
+    func attachmentResponsesDownloadWhenDisplayable() {
+        let policy = WebTabViewModel.navigationResponsePolicy(
+            canShowMIMEType: true,
+            contentDisposition: " Attachment ; filename=report.pdf"
+        )
+
+        #expect(policy == .download)
+    }
+
+    @Test("Inline responses use WebKit MIME support to choose their policy")
+    func inlineResponsesFollowMIMESupport() {
+        #expect(
+            WebTabViewModel.navigationResponsePolicy(
+                canShowMIMEType: true,
+                contentDisposition: "inline; filename=report.pdf"
+            ) == .allow
+        )
+        #expect(
+            WebTabViewModel.navigationResponsePolicy(
+                canShowMIMEType: false,
+                contentDisposition: nil
+            ) == .download
+        )
+    }
+
     @Test("Find bar opens only when a page is loaded")
     func findBarOpensOnlyWhenPageIsLoaded() throws {
         let viewModel = WebTabViewModel(websiteDataStore: .nonPersistent())
