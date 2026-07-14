@@ -57,13 +57,13 @@ struct BriefingPageView: View {
                 guard shouldFollowStreamingFollowUp else { return }
                 scrollToFollowUpBottom(using: proxy, animated: false)
             }
-            .background(briefingPageBackground)
             .animation(.easeOut(duration: 0.16), value: shouldShowReturnToBottomButton)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if shouldShowFloatingFollowUp {
                     floatingFollowUpBar(using: proxy)
                 }
             }
+            .background(briefingPageBackground)
             .environment(\.openURL, OpenURLAction { url in
                 openBriefingURL(url)
             })
