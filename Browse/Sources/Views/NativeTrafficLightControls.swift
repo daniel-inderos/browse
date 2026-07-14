@@ -54,7 +54,7 @@ final class NativeTrafficLightContainerView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        observeFullscreenChangesIfNeeded()
+        observeWindowChangesIfNeeded()
         installTrafficLightsIfPossible()
     }
 
@@ -66,7 +66,7 @@ final class NativeTrafficLightContainerView: NSView {
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
-            removeFullscreenObservers()
+            removeWindowObservers()
             detachAndHideTrafficLights()
         }
 
@@ -75,7 +75,7 @@ final class NativeTrafficLightContainerView: NSView {
 
     func installTrafficLightsIfPossible() {
         guard let window else { return }
-        observeFullscreenChangesIfNeeded()
+        observeWindowChangesIfNeeded()
 
         for type in Self.windowButtonTypes {
             guard let button = window.standardWindowButton(type) else { continue }
@@ -188,13 +188,14 @@ final class NativeTrafficLightContainerView: NSView {
         )
     }
 
-    private func observeFullscreenChangesIfNeeded() {
+    private func observeWindowChangesIfNeeded() {
         guard let window, observedWindow !== window else { return }
 
-        removeFullscreenObservers()
+        removeWindowObservers()
         observedWindow = window
 
         let notificationNames: [Notification.Name] = [
+            NSWindow.didResizeNotification,
             NSWindow.willEnterFullScreenNotification,
             NSWindow.didEnterFullScreenNotification,
             NSWindow.didExitFullScreenNotification
@@ -206,7 +207,8 @@ final class NativeTrafficLightContainerView: NSView {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                // Correct AppKit's resize adjustment before the next frame is drawn.
+                MainActor.assumeIsolated {
                     self?.installTrafficLightsIfPossible()
                 }
             }
@@ -214,7 +216,7 @@ final class NativeTrafficLightContainerView: NSView {
         }
     }
 
-    private func removeFullscreenObservers() {
+    private func removeWindowObservers() {
         for observer in windowObservers {
             NotificationCenter.default.removeObserver(observer)
         }
