@@ -719,8 +719,12 @@ final class BrowserViewModel {
     }
 
     func clearSidebarSelection() {
-        selectedTabIDs = []
-        selectedGroupIDs = []
+        if !selectedTabIDs.isEmpty {
+            selectedTabIDs.removeAll(keepingCapacity: true)
+        }
+        if !selectedGroupIDs.isEmpty {
+            selectedGroupIDs.removeAll(keepingCapacity: true)
+        }
         selectionAnchorTabID = nil
         selectionAnchorGroupID = nil
     }
@@ -770,17 +774,17 @@ final class BrowserViewModel {
     }
 
     func selectTab(_ id: UUID) {
+        guard let tab = tabs.first(where: { $0.id == id }) else { return }
+
         clearSidebarSelection()
-        withAnimation(.easeOut(duration: 0.16)) {
-            activeTabID = id
-        }
-        if let tab = tabs.first(where: { $0.id == id }) {
-            tab.lastAccessedAt = Date()
-            loadStoredURLIfNeeded(for: tab)
-        }
+        guard activeTabID != id else { return }
+
+        activeTabID = id
+        tab.lastAccessedAt = Date()
+        loadStoredURLIfNeeded(for: tab)
         syncChatPanePresentationForActiveTab()
         syncIntentBarVisibilityForActiveTab()
-        persistState()
+        schedulePersistState()
     }
 
     func selectTabByIndex(_ index: Int) {

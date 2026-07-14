@@ -144,7 +144,6 @@ struct TabItemView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: isHovering)
-        .animation(.easeOut(duration: 0.15), value: isActive)
     }
 
     // MARK: - Helpers
@@ -308,7 +307,6 @@ struct FavoriteTabItemView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: isHovering)
-        .animation(.easeOut(duration: 0.15), value: isActive)
     }
 
     private var tabBackground: Color {
