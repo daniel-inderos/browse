@@ -363,6 +363,41 @@ struct TabBarView: View {
                 )
             }
 
+            if !browserVM.isPrivateBrowsing {
+                Button(action: { browserVM.toggleHistoryPanel() }) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(
+                            browserVM.isHistoryPanelVisible
+                                ? BrowseColor.accent
+                                : Color.secondary
+                        )
+                        .frame(width: 34, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.04))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("History (⌘Y)")
+                .popover(
+                    isPresented: Binding(
+                        get: { browserVM.isHistoryPanelVisible },
+                        set: { isPresented in
+                            if isPresented {
+                                browserVM.isHistoryPanelVisible = true
+                            } else {
+                                browserVM.hideHistoryPanel()
+                            }
+                        }
+                    ),
+                    arrowEdge: .trailing
+                ) {
+                    HistoryPanelView()
+                }
+            }
+
             Button(action: { browserVM.createTabGroup() }) {
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 12, weight: .semibold))

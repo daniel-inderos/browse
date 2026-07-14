@@ -52,6 +52,8 @@ final class BrowserViewModel {
     var isPageZoomIndicatorVisible: Bool = false
     var pageZoomIndicatorText: String?
     var isDownloadsPanelVisible: Bool = false
+    var isHistoryPanelVisible: Bool = false
+    var browsingHistory: [BrowsingHistoryEntry] = []
     var workspaces: [PersistedWorkspace] = []
     var activeWorkspaceID: UUID = BrowserPersistenceStore.defaultWorkspaceID
     let isPrivateBrowsing: Bool
@@ -142,12 +144,60 @@ final class BrowserViewModel {
         let willShowDownloadsPanel = !isDownloadsPanelVisible
         isDownloadsPanelVisible = willShowDownloadsPanel
         if willShowDownloadsPanel {
+            isHistoryPanelVisible = false
             isTabBarVisible = true
         }
     }
 
     func hideDownloadsPanel() {
         isDownloadsPanelVisible = false
+    }
+
+    // MARK: - Browsing History
+
+    func toggleHistoryPanel() {
+        guard !isPrivateBrowsing else { return }
+        let willShowHistory = !isHistoryPanelVisible
+        isHistoryPanelVisible = willShowHistory
+        if willShowHistory {
+            isDownloadsPanelVisible = false
+            isTabBarVisible = true
+            refreshBrowsingHistory()
+        }
+    }
+
+    func hideHistoryPanel() {
+        isHistoryPanelVisible = false
+    }
+
+    func refreshBrowsingHistory() {
+        guard !isPrivateBrowsing else {
+            browsingHistory = []
+            return
+        }
+        browsingHistory = persistenceStore.loadBrowsingHistory()
+    }
+
+    func openHistoryEntry(_ entry: BrowsingHistoryEntry) {
+        openURL(entry.url)
+        hideHistoryPanel()
+    }
+
+    func openHistoryEntryInNewTab(_ entry: BrowsingHistoryEntry) {
+        openSourceInNewTab(entry.url)
+        hideHistoryPanel()
+    }
+
+    func removeHistoryEntry(_ entry: BrowsingHistoryEntry) {
+        guard !isPrivateBrowsing else { return }
+        persistenceStore.removeBrowsingHistoryEntry(entry.id)
+        browsingHistory.removeAll { $0.id == entry.id }
+    }
+
+    func clearBrowsingHistory() {
+        guard !isPrivateBrowsing else { return }
+        persistenceStore.clearBrowsingHistory()
+        browsingHistory = []
     }
 
     // MARK: - Workspaces
@@ -999,6 +1049,10 @@ final class BrowserViewModel {
 
     func toggleTabBarVisibility() {
         isTabBarVisible.toggle()
+        if !isTabBarVisible {
+            isHistoryPanelVisible = false
+            isDownloadsPanelVisible = false
+        }
         persistState()
     }
 
@@ -1054,6 +1108,8 @@ final class BrowserViewModel {
         guard !isPrivateBrowsing else { return }
 
         recentlyClosedTabs = []
+        browsingHistory = []
+        isHistoryPanelVisible = false
         for tab in tabs where tab.kind == .web {
             tab.webTabViewModel?.clearNavigationHistoryKeepingCurrentPage()
         }
@@ -1548,6 +1604,7 @@ final class BrowserViewModel {
         pageChatViewModelsByKey = [:]
         visiblePageChatKeys = []
         isChatPaneVisible = false
+        isHistoryPanelVisible = false
         chatViewModel = nil
         isTabBarVisible = true
         if resetsTabBarWidth {
@@ -1778,6 +1835,9 @@ final class BrowserViewModel {
         webVM.onOpenURLInNewTab = { [weak self] url, activates in
             self?.openSourceInNewTab(url, activates: activates)
         }
+        webVM.onNavigationFinished = { [weak self] url, title in
+            self?.recordBrowsingHistoryVisit(to: url, title: title)
+        }
         webVM.onStateChange = { [weak self, weak tab, weak webVM] in
             guard let self, let tab, let webVM else { return }
             let persistedBefore = self.webTabPersistenceSignature(for: tab)
@@ -1949,6 +2009,17 @@ final class BrowserViewModel {
             tab.title = webVM.pageTitle
         } else if let host = webVM.currentURL?.host {
             tab.title = host
+        }
+    }
+
+    private func recordBrowsingHistoryVisit(to url: URL, title: String) {
+        guard !isPrivateBrowsing,
+              let entry = persistenceStore.recordBrowsingHistoryVisit(to: url, title: title) else {
+            return
+        }
+
+        if isHistoryPanelVisible {
+            browsingHistory.insert(entry, at: 0)
         }
     }
 

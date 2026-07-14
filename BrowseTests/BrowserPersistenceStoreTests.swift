@@ -4,6 +4,109 @@ import Testing
 
 @Suite("BrowserPersistenceStore")
 struct BrowserPersistenceStoreTests {
+    @Test("records browsing history newest first")
+    func recordsBrowsingHistoryNewestFirst() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let earlierURL = try #require(URL(string: "https://example.com/earlier"))
+        let laterURL = try #require(URL(string: "https://example.com/later"))
+
+        let earlier = try #require(
+            store.recordBrowsingHistoryVisit(
+                to: earlierURL,
+                title: "Earlier",
+                visitedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let later = try #require(
+            store.recordBrowsingHistoryVisit(
+                to: laterURL,
+                title: "Later",
+                visitedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        #expect(store.loadBrowsingHistory() == [later, earlier])
+        #expect(store.loadBrowsingHistory(limit: 1) == [later])
+    }
+
+    @Test("removes individual visits and clears history")
+    func removesAndClearsBrowsingHistory() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let firstURL = try #require(URL(string: "https://example.com/first"))
+        let secondURL = try #require(URL(string: "https://example.com/second"))
+        let first = try #require(
+            store.recordBrowsingHistoryVisit(
+                to: firstURL,
+                title: "First",
+                visitedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let second = try #require(
+            store.recordBrowsingHistoryVisit(
+                to: secondURL,
+                title: "Second",
+                visitedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        store.removeBrowsingHistoryEntry(first.id)
+        #expect(store.loadBrowsingHistory() == [second])
+
+        store.clearBrowsingHistory()
+        #expect(store.loadBrowsingHistory().isEmpty)
+    }
+
+    @Test("history ignores non-web URLs and follows browsing retention")
+    func browsingHistoryPrivacyAndRetention() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let store = BrowserPersistenceStore(directoryURL: directory)
+        let oldURL = try #require(URL(string: "https://example.com/old"))
+        let recentURL = try #require(URL(string: "https://example.com/recent"))
+        let fileURL = try #require(URL(string: "file:///tmp/private.html"))
+        let oldEntry = try #require(
+            store.recordBrowsingHistoryVisit(
+                to: oldURL,
+                title: "Old",
+                visitedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        let recentEntry = try #require(
+            store.recordBrowsingHistoryVisit(
+                to: recentURL,
+                title: "Recent",
+                visitedAt: Date(timeIntervalSince1970: 300)
+            )
+        )
+
+        #expect(
+            store.recordBrowsingHistoryVisit(
+                to: fileURL,
+                title: "Local"
+            ) == nil
+        )
+
+        try store.pruneBrowsingData(olderThan: Date(timeIntervalSince1970: 200))
+        #expect(store.loadBrowsingHistory() == [recentEntry])
+        #expect(!store.loadBrowsingHistory().contains(oldEntry))
+    }
+
     @Test("saves and removes independent window states")
     func savesAndRemovesIndependentWindowStates() throws {
         let directory = FileManager.default.temporaryDirectory

@@ -181,6 +181,7 @@ final class WebTabViewModel: NSObject {
     var onStateChange: (() -> Void)?
     var onScrollPositionChange: ((CGFloat) -> Void)?
     var onOpenURLInNewTab: ((URL, Bool) -> Void)?
+    var onNavigationFinished: ((URL, String) -> Void)?
     var navigationHistorySnapshot: [URL] { navigationHistory }
     var navigationHistorySnapshotIndex: Int? { navigationHistoryIndex }
     var isFindBarVisible: Bool = false
@@ -589,6 +590,7 @@ final class WebTabViewModel: NSObject {
         onStateChange = nil
         onScrollPositionChange = nil
         onOpenURLInNewTab = nil
+        onNavigationFinished = nil
         observations.removeAll()
 
         webView.navigationDelegate = nil
@@ -1128,6 +1130,9 @@ extension WebTabViewModel: WKNavigationDelegate {
                 performFind(backwards: false, resetsIndex: true)
             }
             onStateChange?()
+            if let currentURL {
+                onNavigationFinished?(currentURL, pageTitle)
+            }
         }
     }
 

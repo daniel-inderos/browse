@@ -131,6 +131,13 @@ struct PersistedWorkspace: Codable, Identifiable, Equatable {
     var isDefault: Bool
 }
 
+struct BrowsingHistoryEntry: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let url: URL
+    let title: String
+    let visitedAt: Date
+}
+
 struct BrowserPersistenceStore {
     private static let legacyJSONMigrationKey = "legacy-json-migrated"
     private static let lastOpenedWorkspaceIDKey = "last-opened-workspace-id"
@@ -232,6 +239,118 @@ struct BrowserPersistenceStore {
         } catch {
             persistenceLogger.error("Failed to load last workspace id; category=\(Self.errorCategory(error), privacy: .public)")
             return nil
+        }
+    }
+
+    func loadBrowsingHistory(limit: Int? = nil) -> [BrowsingHistoryEntry] {
+        if let limit, limit <= 0 { return [] }
+
+        do {
+            return try withDatabase { database in
+                var entries: [BrowsingHistoryEntry] = []
+                let query = if limit == nil {
+                    """
+                    SELECT id, url, title, visited_at
+                    FROM browsing_history
+                    ORDER BY visited_at DESC, rowid DESC
+                    """
+                } else {
+                    """
+                    SELECT id, url, title, visited_at
+                    FROM browsing_history
+                    ORDER BY visited_at DESC, rowid DESC
+                    LIMIT ?
+                    """
+                }
+                try database.prepare(
+                    query
+                ) { statement in
+                    if let limit {
+                        try bindInt(limit, to: statement, at: 1, database: database)
+                    }
+                    while try stepRow(statement, database: database) {
+                        guard let idString = columnText(statement, at: 0),
+                              let id = UUID(uuidString: idString),
+                              let urlString = columnText(statement, at: 1),
+                              let url = URL(string: urlString) else {
+                            continue
+                        }
+                        entries.append(
+                            BrowsingHistoryEntry(
+                                id: id,
+                                url: url,
+                                title: columnText(statement, at: 2) ?? url.displayHost,
+                                visitedAt: columnDate(statement, at: 3)
+                            )
+                        )
+                    }
+                }
+                return entries
+            }
+        } catch {
+            persistenceLogger.error("Failed to load browsing history; category=\(Self.errorCategory(error), privacy: .public)")
+            return []
+        }
+    }
+
+    @discardableResult
+    func recordBrowsingHistoryVisit(
+        to url: URL,
+        title: String,
+        visitedAt: Date = Date()
+    ) -> BrowsingHistoryEntry? {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entry = BrowsingHistoryEntry(
+            id: UUID(),
+            url: url,
+            title: trimmedTitle.isEmpty ? url.displayHost : trimmedTitle,
+            visitedAt: visitedAt
+        )
+
+        do {
+            try withDatabase { database in
+                try database.prepare(
+                    """
+                    INSERT INTO browsing_history (id, url, title, visited_at)
+                    VALUES (?, ?, ?, ?)
+                    """
+                ) { statement in
+                    try bindText(entry.id.uuidString, to: statement, at: 1, database: database)
+                    try bindText(entry.url.absoluteString, to: statement, at: 2, database: database)
+                    try bindText(entry.title, to: statement, at: 3, database: database)
+                    try bindDate(entry.visitedAt, to: statement, at: 4, database: database)
+                    try stepDone(statement, database: database)
+                }
+            }
+            return entry
+        } catch {
+            persistenceLogger.error("Failed to record browsing history; category=\(Self.errorCategory(error), privacy: .public)")
+            return nil
+        }
+    }
+
+    func removeBrowsingHistoryEntry(_ id: UUID) {
+        do {
+            try withDatabase { database in
+                try database.prepare("DELETE FROM browsing_history WHERE id = ?") { statement in
+                    try bindText(id.uuidString, to: statement, at: 1, database: database)
+                    try stepDone(statement, database: database)
+                }
+            }
+        } catch {
+            persistenceLogger.error("Failed to remove browsing history entry; category=\(Self.errorCategory(error), privacy: .public)")
+        }
+    }
+
+    func clearBrowsingHistory() {
+        do {
+            try withDatabase { database in
+                try database.execute("DELETE FROM browsing_history")
+            }
+        } catch {
+            persistenceLogger.error("Failed to clear browsing history; category=\(Self.errorCategory(error), privacy: .public)")
         }
     }
 
@@ -626,6 +745,10 @@ struct BrowserPersistenceStore {
             let snapshots = try loadWindowSnapshots(in: database)
             let workspaceStates = try loadWorkspaceStateSnapshots(in: database)
             try database.transaction {
+                try database.prepare("DELETE FROM browsing_history WHERE visited_at < ?") { statement in
+                    try bindDate(cutoff, to: statement, at: 1, database: database)
+                    try stepDone(statement, database: database)
+                }
                 for snapshot in snapshots {
                     let state = snapshot.state.pruningBrowsingData(olderThan: cutoff)
                     if state.isRestorableWindowState {
@@ -786,6 +909,16 @@ struct BrowserPersistenceStore {
                 url TEXT NOT NULL,
                 PRIMARY KEY(tab_id, sort_order)
             );
+
+            CREATE TABLE IF NOT EXISTS browsing_history (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                visited_at REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS browsing_history_visited_idx
+            ON browsing_history(visited_at DESC, id DESC);
 
             CREATE TABLE IF NOT EXISTS briefing_conversation_messages (
                 tab_id TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,

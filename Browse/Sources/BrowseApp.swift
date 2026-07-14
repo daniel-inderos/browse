@@ -229,6 +229,15 @@ private struct BrowserCommands: Commands {
             .disabled(browserViewModel == nil)
         }
 
+        CommandMenu("History") {
+            Button(browserViewModel?.isHistoryPanelVisible == true ? "Hide History" : "Show History") {
+                NSApp.activate(ignoringOtherApps: true)
+                browserViewModel?.toggleHistoryPanel()
+            }
+            .keyboardShortcut("y", modifiers: .command)
+            .disabled(browserViewModel == nil || browserViewModel?.isPrivateBrowsing == true)
+        }
+
         CommandMenu("Workspaces") {
             Button("New Workspace") {
                 browserViewModel?.createWorkspaceWithSuggestedName()
